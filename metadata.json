@@ -1,0 +1,5 @@
+{
+  "name": "AI Quiz Generator Pro",
+  "description": "Upload any document or a spreadsheet of questions, and let AI create an interactive and educational quiz for you. Select difficulty levels, save your favorite questions, and export them in exam or Excel formats.",
+  "requestFramePermissions": []
+}
