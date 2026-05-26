@@ -30,6 +30,8 @@ export interface QuizResult {
   date: string;
 }
 
+export type QuizMode = 'MultipleChoice' | 'Written';
+
 export interface ActiveQuiz {
     id: string;
     name?: string;
@@ -38,7 +40,10 @@ export interface ActiveQuiz {
     isTimed: boolean;
     explanationStyle: ExplanationStyle;
     currentQuestionIndex: number;
-    userAnswers: { [questionId: string]: number }; // question.id -> selected option index
+    mode: QuizMode;
+    userAnswers: { [questionId: string]: number }; // For MCQs
+    writtenUserAnswers?: { [questionId: string]: { text: string; score?: number; feedback?: string; isGraded: boolean } }; // For written
+    savedExplanations?: { [questionId: string]: string[] };
 }
 
 export interface CompletedQuiz {
@@ -48,9 +53,12 @@ export interface CompletedQuiz {
     difficulty: Difficulty;
     isTimed: boolean;
     explanationStyle: ExplanationStyle;
+    mode: QuizMode;
     userAnswers: { [questionId: string]: number };
+    writtenUserAnswers?: { [questionId: string]: { text: string; score: number; feedback: string; } };
+    savedExplanations?: { [questionId: string]: string[] };
     score: number;
-    totalQuestions: number;
+    totalQuestions: number; // For MCQ: number of questions. For Written: number of questions * 100
     date: string;
 }
 

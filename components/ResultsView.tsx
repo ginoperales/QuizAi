@@ -1,19 +1,25 @@
 
+
 import React from 'react';
 import { RefreshIcon } from './icons';
+import { CompletedQuiz } from '../types';
 
 interface ResultsViewProps {
-  score: number;
-  totalQuestions: number;
+  quiz: CompletedQuiz;
   onRestart: () => void;
   onRetake: () => void;
-  incorrectCount: number;
   t: (key: any) => string;
 }
 
-const ResultsView: React.FC<ResultsViewProps> = ({ score, totalQuestions, onRestart, onRetake, incorrectCount, t }) => {
+const ResultsView: React.FC<ResultsViewProps> = ({ quiz, onRestart, onRetake, t }) => {
+  const { score, totalQuestions, mode } = quiz;
   const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
-  const correctCount = score;
+  
+  const isWritten = mode === 'Written';
+
+  const questionsToReviewCount = isWritten
+    ? Object.values(quiz.writtenUserAnswers || {}).filter(a => a.score < 70).length
+    : quiz.totalQuestions - quiz.score;
 
   return (
     <div className="max-w-md mx-auto bg-white dark:bg-gray-800 p-8 rounded-xl shadow-lg text-center animate-fade-in">
@@ -46,24 +52,20 @@ const ResultsView: React.FC<ResultsViewProps> = ({ score, totalQuestions, onRest
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 my-6 text-center">
+      <div className="grid grid-cols-1 gap-4 my-6 text-center">
           <div>
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('correctAnswers')}</p>
-              <p className="text-2xl font-bold text-green-600">{correctCount}</p>
-          </div>
-          <div>
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('incorrectAnswers')}</p>
-              <p className="text-2xl font-bold text-red-600">{incorrectCount}</p>
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('score')}</p>
+              <p className="text-2xl font-bold text-gray-700 dark:text-gray-200">{isWritten ? `${score} / ${totalQuestions}` : `${score} / ${totalQuestions}`}</p>
           </div>
       </div>
       
-      {incorrectCount > 0 && (
+      {questionsToReviewCount > 0 && (
           <button
               onClick={onRetake}
               className="w-full flex items-center justify-center py-3 px-4 mb-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-colors"
           >
               <RefreshIcon className="h-5 w-5 mr-2" />
-              {t('retakeIncorrect')}
+              {isWritten ? t('retakeIncorrect').replace('Incorrect Questions', 'Questions to Review') : t('retakeIncorrect')}
           </button>
       )}
 

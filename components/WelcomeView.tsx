@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import QuizGenerator from './QuizGenerator';
-import { Question, Difficulty, ExplanationStyle } from '../types';
+// FIX: Import QuizMode to use in the onQuizGenerated prop signature.
+import { Question, Difficulty, ExplanationStyle, QuizMode } from '../types';
 import { UploadIcon, StarIcon, HistoryIcon, ClipboardDocumentIcon } from './icons';
 
 interface WelcomeViewProps {
-  onQuizGenerated: (questions: Question[], difficulty: Difficulty, isTimed: boolean, explanationStyle: ExplanationStyle) => void;
+  // FIX: Add QuizMode to the onQuizGenerated prop signature to match the function in App.tsx.
+  onQuizGenerated: (questions: Question[], difficulty: Difficulty, isTimed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => void;
   onGenerationFailed: (error: string) => void;
   setIsLoading: (isLoading: boolean) => void;
   t: (key: any) => string;

@@ -1,11 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { Difficulty, Question, ExplanationStyle } from '../types';
+import { Difficulty, Question, ExplanationStyle, QuizMode } from '../types';
 import { generateQuestionsFromText, generateQuestionsFromImage } from '../services/geminiService';
 import { parseSpreadsheet, readFileAsText, readFileAsBase64, downloadExcelTemplate } from '../services/fileService';
 import { UploadIcon, DownloadIcon } from './icons';
 
 interface QuizGeneratorProps {
-  onQuizGenerated: (questions: Question[], difficulty: Difficulty, isTimed: boolean, explanationStyle: ExplanationStyle) => void;
+  onQuizGenerated: (questions: Question[], difficulty: Difficulty, isTimed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => void;
   onGenerationFailed: (error: string) => void;
   setIsLoading: (isLoading: boolean) => void;
   t: (key: any) => string;
@@ -17,6 +17,8 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ onQuizGenerated, onGenera
   const [fileName, setFileName] = useState<string>('');
   const [isTimed, setIsTimed] = useState<boolean>(true);
   const [explanationStyle, setExplanationStyle] = useState<ExplanationStyle>(ExplanationStyle.Didactica);
+  const [quizMode, setQuizMode] = useState<QuizMode>('MultipleChoice');
+  const [customPrompt, setCustomPrompt] = useState<string>('');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -35,18 +37,18 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ onQuizGenerated, onGenera
     try {
         if (file.type.includes('sheet') || file.name.endsWith('.csv') || file.name.endsWith('.xlsx')) {
             const questions = await parseSpreadsheet(file);
-            onQuizGenerated(questions, difficulty, isTimed, explanationStyle);
+            onQuizGenerated(questions, difficulty, isTimed, explanationStyle, quizMode);
         } else if (file.type.startsWith('image/')) {
             const { mimeType, data } = await readFileAsBase64(file);
-            const questions = await generateQuestionsFromImage(data, mimeType, difficulty, t);
-            onQuizGenerated(questions, difficulty, isTimed, explanationStyle);
+            const questions = await generateQuestionsFromImage(data, mimeType, difficulty, t, customPrompt);
+            onQuizGenerated(questions, difficulty, isTimed, explanationStyle, quizMode);
         } else {
             const textContent = await readFileAsText(file);
             if (!textContent.trim()) {
                 throw new Error("File is empty or could not be read.");
             }
-            const questions = await generateQuestionsFromText(textContent, difficulty, t);
-            onQuizGenerated(questions, difficulty, isTimed, explanationStyle);
+            const questions = await generateQuestionsFromText(textContent, difficulty, t, customPrompt);
+            onQuizGenerated(questions, difficulty, isTimed, explanationStyle, quizMode);
         }
     } catch (error) {
         console.error(error);
@@ -54,9 +56,10 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ onQuizGenerated, onGenera
     } finally {
         setIsLoading(false);
     }
-  }, [file, difficulty, isTimed, explanationStyle, onQuizGenerated, onGenerationFailed, setIsLoading, t]);
+  }, [file, difficulty, isTimed, explanationStyle, quizMode, customPrompt, onQuizGenerated, onGenerationFailed, setIsLoading, t]);
   
   const difficultyLevels = Object.values(Difficulty);
+  const quizModes = ['MultipleChoice', 'Written'] as QuizMode[];
   const difficultyTimeMap: Record<Difficulty, number> = {
     [Difficulty.Easy]: 30,
     [Difficulty.Medium]: 20,
@@ -95,6 +98,37 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ onQuizGenerated, onGenera
                 {t('downloadTemplate')}
               </button>
             </div>
+        </div>
+
+        <div>
+            <label htmlFor="custom-prompt" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t('specificInstructions')} <span className="text-gray-400">({t('optional')})</span>
+            </label>
+            <textarea
+                id="custom-prompt"
+                rows={3}
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                className="mt-1 block w-full pl-3 pr-4 py-2 text-base border-gray-300 focus:outline-none focus:ring-[rgb(var(--primary-500))] focus:border-[rgb(var(--primary-500))] sm:text-sm rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                placeholder={t('promptPlaceholder')}
+            />
+        </div>
+
+        <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t('quizMode')}</label>
+            <fieldset className="mt-2">
+                <legend className="sr-only">{t('quizMode')}</legend>
+                <div className="grid grid-cols-2 gap-3">
+                    {quizModes.map((mode) => (
+                        <div key={mode}>
+                            <input type="radio" name="quiz-mode" id={mode} value={mode} checked={quizMode === mode} onChange={() => setQuizMode(mode)} className="sr-only peer" />
+                            <label htmlFor={mode} className="flex items-center justify-center rounded-md py-2 px-3 text-sm font-medium uppercase sm:flex-1 cursor-pointer border bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm hover:bg-gray-50 dark:hover:bg-gray-600 peer-checked:ring-2 peer-checked:ring-[rgba(var(--primary-500),1)] peer-checked:ring-offset-2 peer-checked:border-transparent">
+                                {t(mode)}
+                            </label>
+                        </div>
+                    ))}
+                </div>
+            </fieldset>
         </div>
 
         <div>

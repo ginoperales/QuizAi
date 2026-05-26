@@ -492,7 +492,7 @@ export const exportQuizWithKeyToPdf = (quiz: CompletedQuiz, t: (key: any) => str
     doc.save(`${t('examTitle')}-con-clave-${quiz.id}.pdf`);
 }
 
-export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => string) => {
+export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any, options?: any) => string) => {
     // 1. Create Summary Data
     const summaryData = [
         [t('name'), quiz.name || t('untitledQuiz')],
@@ -504,6 +504,9 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => st
     const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryData);
 
     // 2. Create Questions Data
+    const maxExplanations = Object.values(quiz.savedExplanations || {}).reduce((max, arr) => Math.max(max, arr.length), 0);
+    const explanationHeaders = Array.from({ length: maxExplanations }, (_, i) => t('explanationColumn', { n: i + 1 }));
+
     const questionsHeaders = [
         '#',
         t('question'),
@@ -514,7 +517,8 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => st
         t('correctAnswer'),
         t('yourAnswer'),
         t('result'),
-        t('justification')
+        t('justification'),
+        ...explanationHeaders
     ];
 
     const questionsData = quiz.questions.map((q, index) => {
@@ -525,6 +529,9 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => st
             resultText = userAnswerIndex === q.correctAnswerIndex ? t('correct') : t('incorrect');
         }
 
+        const savedExps = quiz.savedExplanations?.[q.id] || [];
+        const explanationCells = Array.from({ length: maxExplanations }, (_, i) => decodeHtml(savedExps[i] || ''));
+
         return [
             index + 1,
             decodeHtml(q.questionText),
@@ -532,7 +539,8 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => st
             decodeHtml(q.options[q.correctAnswerIndex]),
             decodeHtml(yourAnswerText),
             resultText,
-            decodeHtml(q.justification)
+            decodeHtml(q.justification),
+            ...explanationCells
         ];
     });
 
@@ -541,6 +549,7 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => st
     // Set column widths
     const summaryWidths = [{ wch: 20 }, { wch: 50 }];
     summaryWorksheet['!cols'] = summaryWidths;
+    const explanationWidths = Array(maxExplanations).fill({ wch: 60 });
     const questionsWidths = [
         { wch: 5 },  // #
         { wch: 60 }, // Question
@@ -552,6 +561,7 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any) => st
         { wch: 30 }, // Your Answer
         { wch: 15 }, // Result
         { wch: 60 }, // Justification
+        ...explanationWidths
     ];
     questionsWorksheet['!cols'] = questionsWidths;
 

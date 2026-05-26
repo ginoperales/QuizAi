@@ -39,20 +39,86 @@ const responseSchema = {
   },
 };
 
+const gradingSchema = {
+    type: Type.OBJECT,
+    properties: {
+      score: {
+        type: Type.INTEGER,
+        description: 'A similarity score between 0 and 100, representing how close the user answer is to the correct answer in meaning. 100 is a perfect match.'
+      },
+      feedback: {
+        type: Type.STRING,
+        description: 'Brief, constructive feedback for the user in 1-2 sentences. Explain why the answer is correct or what it is missing.'
+      }
+    },
+    required: ['score', 'feedback']
+};
+
+export const gradeWrittenAnswer = async (
+    question: string,
+    correctAnswer: string,
+    userAnswer: string,
+    language: Language
+): Promise<{ score: number; feedback: string }> => {
+    const languageMap = { en: 'English', es: 'Spanish' };
+
+    const prompt = `
+        You are an AI quiz grader. Evaluate the user's answer for the following question.
+        The correct answer is provided for reference.
+        Provide a similarity score from 0 to 100, where 100 is a perfect match in meaning.
+        Also, provide brief, constructive feedback.
+        The response language must be ${languageMap[language]}.
+        Provide the output *only* in the JSON format specified in the response schema.
+
+        Question: "${question}"
+        Correct Answer for reference: "${correctAnswer}"
+        User's Answer to grade: "${userAnswer}"
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: gradingSchema,
+            },
+        });
+
+        const rawJson = response.text.trim();
+        const result = JSON.parse(rawJson);
+        
+        if (typeof result.score !== 'number' || typeof result.feedback !== 'string') {
+            throw new Error('Invalid format received from AI grader.');
+        }
+
+        return {
+            score: result.score,
+            feedback: result.feedback,
+        };
+
+    } catch (error) {
+        console.error("Error grading answer with Gemini:", error);
+        throw new Error("Failed to get grading from AI.");
+    }
+};
+
 export const generateQuestionsFromText = async (
   textContent: string,
   difficulty: Difficulty,
-  t: (key: any) => string
+  t: (key: any) => string,
+  customPrompt?: string
 ): Promise<Question[]> => {
   
   const prompt = `
       Based on the following text, generate 5 multiple-choice questions of ${difficulty} difficulty.
+      ${customPrompt ? `PRIORITIZE THE FOLLOWING INSTRUCTIONS: "${customPrompt}"` : ''}
       For each question, also provide a brief justification explaining why the correct answer is correct.
       The questions should be didactic and test understanding of the key concepts in the text.
       The language of the questions and justifications must be the same as the text provided.
       Provide the output *only* in the JSON format specified in the response schema. Do not include any other text, explanations, or markdown formatting.
-      The "options" array must contain exactly 4 items.
-      The "correctAnswerIndex" must be a number between 0 and 3.
+      The "options" array must contain exactly 4 items. The first item in the options array must be the correct answer.
+      The "correctAnswerIndex" must be 0.
       The "justification" must not be empty.
 
       Text:
@@ -106,7 +172,8 @@ export const generateQuestionsFromImage = async (
   imageData: string,
   mimeType: string,
   difficulty: Difficulty,
-  t: (key: any) => string
+  t: (key: any) => string,
+  customPrompt?: string
 ): Promise<Question[]> => {
   const imagePart = {
     inlineData: {
@@ -118,12 +185,13 @@ export const generateQuestionsFromImage = async (
   const promptPart = {
     text: `
       Extract the text from this image. Based on the extracted text, generate 5 multiple-choice questions of ${difficulty} difficulty.
+      ${customPrompt ? `PRIORITIZE THE FOLLOWING INSTRUCTIONS: "${customPrompt}"` : ''}
       For each question, also provide a brief justification explaining why the correct answer is correct.
       The questions should be didactic and test understanding of the key concepts in the text.
       The language of the questions and justifications must be the same as the text provided in the image.
       Provide the output *only* in the JSON format specified in the response schema. Do not include any other text, explanations, or markdown formatting.
-      The "options" array must contain exactly 4 items.
-      The "correctAnswerIndex" must be a number between 0 and 3.
+      The "options" array must contain exactly 4 items. The first item in the options array must be the correct answer.
+      The "correctAnswerIndex" must be 0.
       The "justification" must not be empty.
     `,
   };

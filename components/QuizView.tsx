@@ -35,6 +35,7 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
   const [explanation, setExplanation] = useState('');
   const [isExplanationLoading, setIsExplanationLoading] = useState(false);
   const [modalExplanationStyle, setModalExplanationStyle] = useState<ExplanationStyle>(explanationStyle);
+  const [isExplanationSaved, setIsExplanationSaved] = useState(false);
 
   const timeLimit = TIME_LIMITS[difficulty];
   const [timeLeft, setTimeLeft] = useState(timeLimit);
@@ -155,6 +156,7 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
   const fetchExplanation = async (styleToUse: ExplanationStyle) => {
     setIsExplanationLoading(true);
     setExplanation('');
+    setIsExplanationSaved(false);
     try {
         const deeperExplanation = await getDeeperExplanation(currentQuestion.questionText, shuffledOptions[shuffledCorrectAnswerIndex], currentQuestion.justification || '', language, styleToUse);
         setExplanation(deeperExplanation);
@@ -177,6 +179,21 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
     fetchExplanation(newStyle);
   };
 
+  const handleSaveExplanation = () => {
+    if (!explanation || isExplanationSaved) return;
+
+    const currentExplanations = activeQuiz.savedExplanations?.[currentQuestion.id] || [];
+    const newExplanations = [...currentExplanations, explanation];
+    
+    onUpdate({
+        savedExplanations: {
+            ...activeQuiz.savedExplanations,
+            [currentQuestion.id]: newExplanations,
+        }
+    });
+
+    setIsExplanationSaved(true);
+  };
 
   const goToNext = () => {
     if (currentQuestionIndex < questions.length - 1) {
@@ -304,12 +321,21 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
                       <div className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300" dangerouslySetInnerHTML={{ __html: explanation.replace(/\n/g, '<br />') }} />
                   )}
                 </div>
-                <div className="mt-6 text-right flex justify-between items-center flex-shrink-0">
-                    <button onClick={() => setShowExplanationModal(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md text-sm font-medium hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">{t('close')}</button>
-                    <button onClick={() => fetchExplanation(modalExplanationStyle)} disabled={isExplanationLoading} className="inline-flex items-center px-4 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] disabled:opacity-50 disabled:cursor-not-allowed">
-                      <RefreshIcon className="h-4 w-4 mr-2" />
-                      {t('regenerate')}
+                <div className="mt-6 flex justify-between items-center flex-shrink-0">
+                    <button
+                        onClick={handleSaveExplanation}
+                        disabled={isExplanationSaved || isExplanationLoading || !explanation}
+                        className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isExplanationSaved ? t('explanationSaved') : t('saveExplanation')}
                     </button>
+                    <div className="flex items-center space-x-2">
+                        <button onClick={() => setShowExplanationModal(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md text-sm font-medium hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600">{t('close')}</button>
+                        <button onClick={() => fetchExplanation(modalExplanationStyle)} disabled={isExplanationLoading} className="inline-flex items-center px-4 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] disabled:opacity-50 disabled:cursor-not-allowed">
+                          <RefreshIcon className="h-4 w-4 mr-2" />
+                          {t('regenerate')}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

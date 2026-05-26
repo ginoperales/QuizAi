@@ -1,10 +1,12 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import { Question, View, Language, ActiveQuiz, CompletedQuiz, ThemeSettings, ThemeColor, ExplanationStyle } from './types';
+// FIX: Add Difficulty to imports for type safety in handleQuizGenerated
+import { Question, View, Language, ActiveQuiz, CompletedQuiz, ThemeSettings, ThemeColor, ExplanationStyle, QuizMode, Difficulty } from './types';
 import { APP_TITLE, LOCALIZED_STRINGS } from './constants';
 import { THEMES } from './themes';
 import WelcomeView from './components/WelcomeView';
 import ResumeQuizView from './components/ResumeQuizView';
 import QuizView from './components/QuizView';
+import WrittenQuizView from './components/WrittenQuizView';
 import FavoritesView from './components/FavoritesView';
 import ResultsView from './components/ResultsView';
 import HistoryView from './components/HistoryView';
@@ -125,7 +127,8 @@ const App: React.FC = () => {
     setLanguage(prev => prev === 'en' ? 'es' : 'en');
   };
   
-  const handleQuizGenerated = (generatedQuestions: Question[], selectedDifficulty: any, timed: boolean, explanationStyle: ExplanationStyle) => {
+  // FIX: Type selectedDifficulty as Difficulty for better type safety.
+  const handleQuizGenerated = (generatedQuestions: Question[], selectedDifficulty: Difficulty, timed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => {
     if (activeQuiz && !window.confirm(t('areYouSureAbandon'))) {
       setIsLoading(false);
       return;
@@ -144,7 +147,10 @@ const App: React.FC = () => {
         isTimed: timed,
         explanationStyle: explanationStyle,
         currentQuestionIndex: 0,
+        mode: mode,
         userAnswers: {},
+        writtenUserAnswers: mode === 'Written' ? {} : undefined,
+        savedExplanations: {},
     };
 
     setActiveQuiz(newQuiz);
@@ -187,19 +193,30 @@ const App: React.FC = () => {
         setActiveQuiz(null);
         setCurrentView('generator');
     } else { // 'complete'
-        let score = 0;
-        activeQuiz.questions.forEach(q => {
-            const userAnswerIndex = activeQuiz.userAnswers[q.id];
-            if (userAnswerIndex !== undefined && userAnswerIndex === q.correctAnswerIndex) {
-                score++;
-            }
-        });
+        let finalScore = 0;
+        let finalTotal = activeQuiz.questions.length;
+
+        if (activeQuiz.mode === 'MultipleChoice') {
+            activeQuiz.questions.forEach(q => {
+                const userAnswerIndex = activeQuiz.userAnswers[q.id];
+                if (userAnswerIndex !== undefined && userAnswerIndex === q.correctAnswerIndex) {
+                    finalScore++;
+                }
+            });
+        } else if (activeQuiz.mode === 'Written' && activeQuiz.writtenUserAnswers) {
+            const gradedAnswers = Object.values(activeQuiz.writtenUserAnswers).filter(a => a.score !== undefined);
+            const totalScore = gradedAnswers.reduce((sum, a) => sum + (a.score || 0), 0);
+            finalScore = totalScore;
+            finalTotal = activeQuiz.questions.length * 100; // Max possible score
+        }
 
         const completed: CompletedQuiz = {
             ...namedQuiz,
-            score,
-            totalQuestions: activeQuiz.questions.length,
+            score: finalScore,
+            totalQuestions: finalTotal, // For MCQ: correct count. For Written: sum of scores.
             date: new Date().toISOString(),
+            writtenUserAnswers: activeQuiz.writtenUserAnswers as any, // Ensure it's stored
+            savedExplanations: activeQuiz.savedExplanations,
         };
         
         setCompletedQuizzes(prev => [completed, ...prev]);
@@ -214,21 +231,23 @@ const App: React.FC = () => {
   };
 
   const handleAbandonQuiz = () => {
-    if (window.confirm(t('areYouSureAbandon'))) {
-        setActiveQuiz(null);
-    }
+    setActiveQuiz(null);
   };
 
   const handleRetakeIncorrect = () => {
     if (!lastCompletedQuiz) return;
     
     const incorrectQuestions = lastCompletedQuiz.questions.filter(q => {
+        if (lastCompletedQuiz.mode === 'Written') {
+            const answer = lastCompletedQuiz.writtenUserAnswers?.[q.id];
+            return !answer || answer.score < 70; // Threshold for "incorrect"
+        }
         const userAnswer = lastCompletedQuiz.userAnswers[q.id];
         return userAnswer === undefined || userAnswer !== q.correctAnswerIndex;
     });
 
     if (incorrectQuestions.length > 0) {
-        handleQuizGenerated(incorrectQuestions, lastCompletedQuiz.difficulty, lastCompletedQuiz.isTimed, lastCompletedQuiz.explanationStyle);
+        handleQuizGenerated(incorrectQuestions, lastCompletedQuiz.difficulty, lastCompletedQuiz.isTimed, lastCompletedQuiz.explanationStyle, lastCompletedQuiz.mode);
     }
   };
 
@@ -267,7 +286,7 @@ const App: React.FC = () => {
 
   const handleStartEditedQuiz = (questions: Question[], originalQuiz: CompletedQuiz) => {
     setEditingQuiz(null);
-    handleQuizGenerated(questions, originalQuiz.difficulty, originalQuiz.isTimed, originalQuiz.explanationStyle || ExplanationStyle.Didactica);
+    handleQuizGenerated(questions, originalQuiz.difficulty, originalQuiz.isTimed, originalQuiz.explanationStyle || ExplanationStyle.Didactica, originalQuiz.mode);
   };
 
   const handleRenameQuiz = (idToRename: string, newName: string, type: QuizType) => {
@@ -331,7 +350,22 @@ const App: React.FC = () => {
 
     switch (currentView) {
       case 'quiz':
-        return activeQuiz ? (
+        if (!activeQuiz) {
+             return <WelcomeView onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} />;
+        }
+        if (activeQuiz.mode === 'Written') {
+            return (
+                <WrittenQuizView
+                    activeQuiz={activeQuiz}
+                    onUpdate={handleUpdateActiveQuiz}
+                    onComplete={handleQuizComplete}
+                    onSaveAndExit={handleSaveAndExit}
+                    t={t}
+                    language={language}
+                />
+            );
+        }
+        return (
             <QuizView 
                 activeQuiz={activeQuiz}
                 onUpdate={handleUpdateActiveQuiz}
@@ -342,13 +376,12 @@ const App: React.FC = () => {
                 language={language} 
                 onSaveAndExit={handleSaveAndExit}
             />
-        ) : <WelcomeView onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} />;
+        );
       case 'favorites':
         return <FavoritesView favorites={favorites} toggleFavorite={toggleFavorite} t={t} />;
       case 'results':
         if (!lastCompletedQuiz) return <WelcomeView onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} />;
-        const incorrectCount = lastCompletedQuiz.totalQuestions - lastCompletedQuiz.score;
-        return <ResultsView score={lastCompletedQuiz.score} totalQuestions={lastCompletedQuiz.totalQuestions} onRestart={() => setCurrentView('generator')} onRetake={handleRetakeIncorrect} incorrectCount={incorrectCount} t={t} />;
+        return <ResultsView quiz={lastCompletedQuiz} onRestart={() => setCurrentView('generator')} onRetake={handleRetakeIncorrect} t={t} />;
       case 'history':
         return <HistoryView 
                   completedHistory={completedQuizzes} 
@@ -482,34 +515,22 @@ const App: React.FC = () => {
         title={t('enterQuizName')}
       >
         <div className="mt-4">
-            <input 
-                type="text" 
-                value={quizNameToSave} 
-                onChange={(e) => setQuizNameToSave(e.target.value)} 
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-[rgb(var(--primary-500))] focus:border-[rgb(var(--primary-500))] sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                placeholder={t('untitledQuiz')}
-            />
-        </div>
-        <div className="mt-6 flex justify-end space-x-3">
-            <button 
-                type="button" 
-                onClick={() => setIsSaveModalOpen(false)}
-                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md text-sm font-medium hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
-            >
-                {t('cancel')}
-            </button>
-            <button 
-                type="button" 
-                onClick={handleConfirmSave}
-                className="px-4 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[rgba(var(--primary-500),1)]"
-            >
-                {t('save')}
-            </button>
+          <input 
+            type="text" 
+            value={quizNameToSave}
+            onChange={(e) => setQuizNameToSave(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-[rgb(var(--primary-500))] focus:border-[rgb(var(--primary-500))] dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            placeholder={t('untitledQuiz')}
+          />
+          <div className="mt-4 flex justify-end space-x-2">
+            <button onClick={() => setIsSaveModalOpen(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md text-sm font-medium hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">{t('cancel')}</button>
+            <button onClick={handleConfirmSave} className="px-4 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))]">{t('save')}</button>
+          </div>
         </div>
       </Modal>
 
-      <SettingsView 
-        isOpen={isSettingsOpen} 
+      <SettingsView
+        isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         settings={themeSettings}
         onSettingsChange={setThemeSettings}

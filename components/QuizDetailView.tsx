@@ -28,7 +28,8 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
     }
     return 'bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600';
   };
-
+  
+  const percentage = quiz.totalQuestions > 0 ? Math.round((quiz.score / quiz.totalQuestions) * 100) : 0;
   const quizName = decodeHtml(quiz.name) || t('quizDetails');
 
   return (
@@ -41,7 +42,9 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
           </div>
           <div className="text-center">
             <p className="text-lg font-semibold text-gray-700 dark:text-gray-200">{t('yourScore')}</p>
-            <p className="text-3xl font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">{quiz.score} / {quiz.totalQuestions}</p>
+            <p className="text-3xl font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">
+                {quiz.mode === 'Written' ? `${percentage}%` : `${quiz.score} / ${quiz.totalQuestions}`}
+            </p>
           </div>
           <div className="flex flex-wrap justify-center gap-2">
             <button onClick={onGoBack} className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm font-medium hover:bg-gray-700 transition-colors">
@@ -72,37 +75,67 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
       </div>
 
       <ul className="space-y-4">
-        {quiz.questions.map((q, index) => (
-          <li key={q.id} className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-lg shadow-md">
-            <div className="flex justify-between items-start">
-              <p className="text-lg font-semibold text-gray-800 dark:text-white flex-1 pr-4 min-w-0">
-                {index + 1}. {decodeHtml(q.questionText)}
-              </p>
-               <button onClick={() => toggleFavorite(q)} className="text-gray-400 hover:text-yellow-500 transition-colors">
-                {isFavorite(q.id) ? <FilledStarIcon /> : <StarIcon />}
-              </button>
-            </div>
-            <div className="mt-4 space-y-2">
-              {q.options.map((option, i) => (
-                <div
-                  key={i}
-                  className={`text-sm p-3 rounded-lg border ${getOptionClass(i, q)}`}
-                >
-                  {decodeHtml(option)}
+        {quiz.questions.map((q, index) => {
+            if (quiz.mode === 'Written' && quiz.writtenUserAnswers) {
+                const userAnswer = quiz.writtenUserAnswers[q.id];
+                if (!userAnswer) return null;
+                const scoreColor = userAnswer.score >= 70 ? 'text-green-500' : userAnswer.score >= 40 ? 'text-yellow-500' : 'text-red-500';
+
+                return (
+                    <li key={q.id} className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-lg shadow-md">
+                        <p className="text-lg font-semibold text-gray-800 dark:text-white mb-4">{index + 1}. {decodeHtml(q.questionText)}</p>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <h4 className="text-sm font-semibold text-gray-500 dark:text-gray-400">{t('yourWrittenAnswer')}</h4>
+                                <p className="mt-1 p-3 bg-gray-100 dark:bg-gray-700 rounded-md text-gray-800 dark:text-gray-200">{decodeHtml(userAnswer.text)}</p>
+                            </div>
+                            <div>
+                                <h4 className="text-sm font-semibold text-gray-500 dark:text-gray-400">{t('correctAnswerText')}</h4>
+                                <p className="mt-1 p-3 bg-green-50 dark:bg-green-900/50 rounded-md text-green-800 dark:text-green-200">{decodeHtml(q.options[q.correctAnswerIndex])}</p>
+                            </div>
+                            <div className="p-3 bg-blue-50 dark:bg-blue-900/50 rounded-md">
+                                <h4 className="text-sm font-semibold text-blue-800 dark:text-blue-200">{t('aiFeedback')}</h4>
+                                <p className="mt-1 text-blue-700 dark:text-blue-300">{decodeHtml(userAnswer.feedback)}</p>
+                                <p className={`mt-2 text-lg font-bold ${scoreColor}`}>{t('similarityScore')}: {userAnswer.score}/100</p>
+                            </div>
+                        </div>
+                    </li>
+                );
+            }
+
+            return (
+              <li key={q.id} className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-lg shadow-md">
+                <div className="flex justify-between items-start">
+                  <p className="text-lg font-semibold text-gray-800 dark:text-white flex-1 pr-4 min-w-0">
+                    {index + 1}. {decodeHtml(q.questionText)}
+                  </p>
+                   <button onClick={() => toggleFavorite(q)} className="text-gray-400 hover:text-yellow-500 transition-colors">
+                    {isFavorite(q.id) ? <FilledStarIcon /> : <StarIcon />}
+                  </button>
                 </div>
-              ))}
-            </div>
-             {quiz.userAnswers[q.id] === undefined && (
-                <p className="mt-3 text-sm font-semibold text-yellow-600 dark:text-yellow-400">{t('unanswered')}</p>
-             )}
-            {q.justification && (
-              <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
-                <h4 className="font-semibold text-sm text-gray-600 dark:text-gray-400">{t('justification')}</h4>
-                <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{decodeHtml(q.justification)}</p>
-              </div>
-            )}
-          </li>
-        ))}
+                <div className="mt-4 space-y-2">
+                  {q.options.map((option, i) => (
+                    <div
+                      key={i}
+                      className={`text-sm p-3 rounded-lg border ${getOptionClass(i, q)}`}
+                    >
+                      {decodeHtml(option)}
+                    </div>
+                  ))}
+                </div>
+                 {quiz.userAnswers[q.id] === undefined && (
+                    <p className="mt-3 text-sm font-semibold text-yellow-600 dark:text-yellow-400">{t('unanswered')}</p>
+                 )}
+                {q.justification && (
+                  <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
+                    <h4 className="font-semibold text-sm text-gray-600 dark:text-gray-400">{t('justification')}</h4>
+                    <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{decodeHtml(q.justification)}</p>
+                  </div>
+                )}
+              </li>
+            );
+        })}
       </ul>
     </div>
   );
