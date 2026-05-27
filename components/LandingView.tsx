@@ -107,7 +107,6 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
           </div>
           </div>
         </div>
-      </div>
 
       {/* Social Media Section */}
       <div className="backdrop-blur-md bg-white/50 dark:bg-gray-800/40 border border-white/20 dark:border-gray-700/20 shadow-xl rounded-3xl p-8 max-w-4xl mx-auto text-center space-y-6 animate-slide-up-fade-in">

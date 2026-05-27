@@ -701,11 +701,11 @@ const App: React.FC = () => {
               localStorage.removeItem('activeQuiz');
               localStorage.removeItem('pausedQuizzes');
               
-              // Trigger welcome animation
+              // Navigate immediately so the screen is ready, then show welcome overlay on top
+              setCurrentView('generator');
               setShowWelcomeOverlay(profile.alias);
               setTimeout(() => {
                 setShowWelcomeOverlay(null);
-                setCurrentView('generator');
               }, 2500);
             }} 
             onGoBack={() => setCurrentView('landing')}
@@ -878,60 +878,6 @@ const App: React.FC = () => {
 
   if (isInitializing) {
     return <SplashScreen />;
-  }
-
-  if (showWelcomeOverlay) {
-    return (
-      <div className="fixed inset-0 bg-gray-950 flex flex-col items-center justify-center z-[100] animate-fade-in">
-        <div className="text-center space-y-6 max-w-sm px-6">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-[rgba(var(--primary-500),0.15)] text-[rgb(var(--primary-400))] shadow-inner border border-[rgba(var(--primary-500),0.2)] animate-bounce">
-            <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-extrabold text-white tracking-tight">
-              ¡Bienvenido, @{showWelcomeOverlay}!
-            </h2>
-            <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
-              Preparando tu entorno educativo
-            </p>
-          </div>
-          <div className="flex justify-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-500))] animate-ping" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-400))] animate-ping" style={{ animationDelay: '0.2s' }} />
-            <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-300))] animate-ping" style={{ animationDelay: '0.4s' }} />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (showFarewellOverlay) {
-    return (
-      <div className="fixed inset-0 bg-gray-950 flex flex-col items-center justify-center z-[100] animate-fade-in">
-        <div className="text-center space-y-6 max-w-sm px-6">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-red-500/10 text-red-400 shadow-inner border border-red-500/20 animate-pulse">
-            <svg className="h-10 w-10 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ animationDuration: '3s' }}>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-          </div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-extrabold text-white tracking-tight">
-              ¡Hasta pronto, @{showFarewellOverlay}!
-            </h2>
-            <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
-              Cerrando sesión de forma segura
-            </p>
-          </div>
-          <div className="flex justify-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
-            <span className="w-2.5 h-2.5 rounded-full bg-red-400 animate-ping" style={{ animationDelay: '0.2s' }} />
-            <span className="w-2.5 h-2.5 rounded-full bg-red-300 animate-ping" style={{ animationDelay: '0.4s' }} />
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -1158,7 +1104,11 @@ const App: React.FC = () => {
       </main>
 
       <footer className="text-center py-6 text-sm text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-800 mt-12 bg-white/20 dark:bg-gray-800/10 backdrop-blur-sm">
-        <p>&copy; {new Date().getFullYear()} {APP_TITLE} - Un producto de <span className="font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">SV GROUP / SV LAB</span></p>
+        <p>&copy; {new Date().getFullYear()} {APP_TITLE} - Un producto de{' '}
+          <a href="https://sv-construcciones.web.app/" target="_blank" rel="noopener noreferrer" className="font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] hover:underline">SV GROUP</a>
+          {' / '}
+          <a href="https://sv-construcciones.web.app/sv-lab" target="_blank" rel="noopener noreferrer" className="font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] hover:underline">SV LAB</a>
+        </p>
       </footer>
 
       <Modal 
@@ -1316,6 +1266,58 @@ const App: React.FC = () => {
         onSettingsChange={setThemeSettings}
         t={t}
       />
+
+      {/* Welcome Animation Overlay — appears ON TOP of the app after login */}
+      {showWelcomeOverlay && (
+        <div className="fixed inset-0 bg-gray-950/95 backdrop-blur-sm flex flex-col items-center justify-center z-[200] animate-fade-in">
+          <div className="text-center space-y-6 max-w-sm px-6">
+            <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-[rgba(var(--primary-500),0.15)] text-[rgb(var(--primary-400))] shadow-inner border border-[rgba(var(--primary-500),0.2)] animate-bounce">
+              <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-2xl font-extrabold text-white tracking-tight">
+                ¡Bienvenido, @{showWelcomeOverlay}!
+              </h2>
+              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
+                Preparando tu entorno educativo
+              </p>
+            </div>
+            <div className="flex justify-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-500))] animate-ping" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-400))] animate-ping" style={{ animationDelay: '0.2s' }} />
+              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-300))] animate-ping" style={{ animationDelay: '0.4s' }} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Farewell Animation Overlay — appears ON TOP of the app during logout */}
+      {showFarewellOverlay && (
+        <div className="fixed inset-0 bg-gray-950/95 backdrop-blur-sm flex flex-col items-center justify-center z-[200] animate-fade-in">
+          <div className="text-center space-y-6 max-w-sm px-6">
+            <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-red-500/10 text-red-400 shadow-inner border border-red-500/20 animate-pulse">
+              <svg className="h-10 w-10 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ animationDuration: '3s' }}>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-2xl font-extrabold text-white tracking-tight">
+                ¡Hasta pronto, @{showFarewellOverlay}!
+              </h2>
+              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
+                Cerrando sesión de forma segura
+              </p>
+            </div>
+            <div className="flex justify-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+              <span className="w-2.5 h-2.5 rounded-full bg-red-400 animate-ping" style={{ animationDelay: '0.2s' }} />
+              <span className="w-2.5 h-2.5 rounded-full bg-red-300 animate-ping" style={{ animationDelay: '0.4s' }} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
