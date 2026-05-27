@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ActiveQuiz, Language, ExplanationStyle, Difficulty } from '../types';
-import { getDeeperExplanation, gradeWrittenAnswer } from '../services/geminiService';
+import { getDeeperExplanation, gradeWrittenAnswer, calculateLocalSimilarity } from '../services/geminiService';
 import { decodeHtml } from '../services/fileService';
 import { LightBulbIcon, RefreshIcon } from './icons';
 
@@ -92,6 +92,7 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({ activeQuiz, t, onUpda
                 score: 0,
                 feedback: t('timeUpWritten'),
                 isGraded: true,
+                gradedBy: 'local' as const
             }
         };
         onUpdate({ writtenUserAnswers: newAnswers });
@@ -101,6 +102,8 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({ activeQuiz, t, onUpda
     }
 
     const correctAnswerText = currentQuestion.options[currentQuestion.correctAnswerIndex];
+    const referenceTextForLocal = correctAnswerText + " " + (currentQuestion.justification || "");
+    
     try {
         const result = await gradeWrittenAnswer(currentQuestion.questionText, correctAnswerText, userText, language);
         const newAnswers = {
@@ -110,13 +113,34 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({ activeQuiz, t, onUpda
                 score: result.score,
                 feedback: result.feedback,
                 isGraded: true,
+                gradedBy: 'ai' as const
             }
         };
         onUpdate({ writtenUserAnswers: newAnswers });
         setIsSubmitted(true);
     } catch (error) {
-        console.error("Failed to grade answer", error);
-        alert(t('errorGeneratingQuiz')); // Re-use a generic error
+        console.error("AI grading failed, falling back to local justification similarity algorithm:", error);
+        
+        // Exceptional Fallback: Local Justification Similarity
+        const localScore = calculateLocalSimilarity(userText, referenceTextForLocal);
+        const explanationText = currentQuestion.justification || correctAnswerText;
+        
+        const localFeedback = language === 'es'
+          ? `Calificación alternativa local. Tu respuesta se comparó con la justificación del cuestionario: "${explanationText}"`
+          : `Alternative local grading. Your answer was compared with the quiz justification: "${explanationText}"`;
+
+        const newAnswers = {
+            ...(activeQuiz.writtenUserAnswers || {}),
+            [currentQuestion.id]: {
+                text: userText,
+                score: localScore,
+                feedback: localFeedback,
+                isGraded: true,
+                gradedBy: 'local' as const
+            }
+        };
+        onUpdate({ writtenUserAnswers: newAnswers });
+        setIsSubmitted(true);
     } finally {
         setIsGrading(false);
     }
@@ -219,8 +243,19 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({ activeQuiz, t, onUpda
                   <h4 className="text-sm font-semibold text-gray-500 dark:text-gray-400">{t('correctAnswerText')}</h4>
                   <p className="mt-1 p-3 bg-green-50 dark:bg-green-900/50 rounded-md text-green-800 dark:text-green-200">{decodeHtml(currentQuestion.options[currentQuestion.correctAnswerIndex])}</p>
               </div>
-              <div className="p-4 bg-blue-50 dark:bg-blue-900/50 rounded-md">
-                  <h4 className="text-sm font-semibold text-blue-800 dark:text-blue-200">{t('aiFeedback')}</h4>
+              <div className="p-4 bg-blue-50 dark:bg-blue-900/50 rounded-md relative overflow-hidden border border-blue-100 dark:border-blue-800/40">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-sm font-semibold text-blue-800 dark:text-blue-200">{t('aiFeedback')}</h4>
+                    {currentAnswer.gradedBy === 'ai' ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/50 animate-pulse">
+                        ✨ Calificado por IA
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50" title="Comparado localmente con la justificación oficial">
+                        ⚠️ Calificación Local (Sin IA)
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 text-blue-700 dark:text-blue-300">{decodeHtml(currentAnswer.feedback)}</p>
                   <p className={`mt-2 text-xl font-bold ${scoreColor}`}>{t('similarityScore')}: {currentAnswer.score}/100</p>
                   <button onClick={openExplanationModal} className="mt-3 inline-flex items-center text-sm font-medium text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] hover:underline"><LightBulbIcon className="h-4 w-4 mr-1" />{t('explainBetter')}</button>

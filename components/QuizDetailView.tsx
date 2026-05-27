@@ -1,10 +1,12 @@
-import React from 'react';
-import { CompletedQuiz, Question, ActiveQuiz } from '../types';
+import React, { useState } from 'react';
+import { CompletedQuiz, Question, ActiveQuiz, FirebaseUser } from '../types';
 import { RefreshIcon, StarIcon, FilledStarIcon, DocumentChartBarIcon, FileTextIcon, PencilSquareIcon, KeyIcon, RectangleStackIcon } from './icons';
 import { exportQuizReportToPdf, exportQuizForEvaluationToPdf, exportQuizWithKeyToPdf, decodeHtml } from '../services/fileService';
+import { submitQuestionFeedback } from '../services/firebaseService';
 
 interface QuizDetailViewProps {
   quiz: CompletedQuiz;
+  currentUser: FirebaseUser | null;
   onGoBack: () => void;
   onRetake: (id: string) => void;
   toggleFavorite: (question: Question) => void;
@@ -13,7 +15,22 @@ interface QuizDetailViewProps {
   t: (key: any) => string;
 }
 
-const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetake, toggleFavorite, isFavorite, onStudy, t }) => {
+const QuizDetailView: React.FC<QuizDetailViewProps> = ({ 
+  quiz, 
+  currentUser,
+  onGoBack, 
+  onRetake, 
+  toggleFavorite, 
+  isFavorite, 
+  onStudy, 
+  t 
+}) => {
+  // Disagreement evaluation states
+  const [activeRating, setActiveRating] = useState<{ [qId: string]: 'good' | 'bad' }>({});
+  const [comments, setComments] = useState<{ [qId: string]: string }>({});
+  const [isSubmitting, setIsSubmitting] = useState<{ [qId: string]: boolean }>({});
+  const [submittedFeedback, setSubmittedFeedback] = useState<{ [qId: string]: boolean }>({});
+  const [feedbackError, setFeedbackError] = useState<{ [qId: string]: string | null }>({});
 
   const getOptionClass = (optionIndex: number, question: Question) => {
     const userAnswer = quiz.userAnswers[question.id];
@@ -31,6 +48,41 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
   
   const percentage = quiz.totalQuestions > 0 ? Math.round((quiz.score / quiz.totalQuestions) * 100) : 0;
   const quizName = decodeHtml(quiz.name) || t('quizDetails');
+
+  const handleSubmitFeedback = async (questionId: string, questionText: string) => {
+    if (!currentUser) return;
+    const rating = activeRating[questionId];
+    if (!rating) return;
+
+    const comment = comments[questionId] || '';
+    if (rating === 'bad' && !comment.trim()) {
+      setFeedbackError(prev => ({ ...prev, [questionId]: "Por favor escribe un breve comentario explicando tu discrepancia." }));
+      return;
+    }
+
+    setIsSubmitting(prev => ({ ...prev, [questionId]: true }));
+    setFeedbackError(prev => ({ ...prev, [questionId]: null }));
+
+    try {
+      await submitQuestionFeedback(
+        quiz.id,
+        quiz.name || 'Cuestionario',
+        questionId,
+        questionText,
+        currentUser.uid,
+        currentUser.alias,
+        rating,
+        comment,
+        quiz.creatorUid || ''
+      );
+      setSubmittedFeedback(prev => ({ ...prev, [questionId]: true }));
+    } catch (err: any) {
+      console.error(err);
+      setFeedbackError(prev => ({ ...prev, [questionId]: "Error al enviar la valoración. Reintenta." }));
+    } finally {
+      setIsSubmitting(prev => ({ ...prev, [questionId]: false }));
+    }
+  };
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -82,8 +134,8 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
                 const scoreColor = userAnswer.score >= 70 ? 'text-green-500' : userAnswer.score >= 40 ? 'text-yellow-500' : 'text-red-500';
 
                 return (
-                    <li key={q.id} className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-lg shadow-md">
-                        <p className="text-lg font-semibold text-gray-800 dark:text-white mb-4">{index + 1}. {decodeHtml(q.questionText)}</p>
+                    <li key={q.id} className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-lg shadow-md space-y-4">
+                        <p className="text-lg font-semibold text-gray-800 dark:text-white">{index + 1}. {decodeHtml(q.questionText)}</p>
                         
                         <div className="space-y-4">
                             <div>
@@ -100,6 +152,79 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
                                 <p className={`mt-2 text-lg font-bold ${scoreColor}`}>{t('similarityScore')}: {userAnswer.score}/100</p>
                             </div>
                         </div>
+
+                        {/* Disagreement feedback evaluation panel */}
+                        {currentUser && !submittedFeedback[q.id] && (
+                          <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-700/50">
+                            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
+                              ¿Difieres de la respuesta o de la calificación de la IA? Valora esta pregunta:
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setActiveRating(prev => ({ ...prev, [q.id]: prev[q.id] === 'good' ? undefined : 'good' }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border ${
+                                  activeRating[q.id] === 'good'
+                                    ? 'bg-green-500/10 border-green-500 text-green-600 dark:text-green-400 font-extrabold shadow-sm'
+                                    : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:text-green-500 dark:hover:text-green-400'
+                                }`}
+                              >
+                                👍 Bien
+                              </button>
+                              
+                              <button
+                                type="button"
+                                onClick={() => setActiveRating(prev => ({ ...prev, [q.id]: prev[q.id] === 'bad' ? undefined : 'bad' }))}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border ${
+                                  activeRating[q.id] === 'bad'
+                                    ? 'bg-red-500/10 border-red-500 text-red-600 dark:text-red-400 font-extrabold shadow-sm'
+                                    : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:text-red-500 dark:hover:text-red-400'
+                                }`}
+                              >
+                                👎 Mal
+                              </button>
+                            </div>
+
+                            {activeRating[q.id] && (
+                              <div className="mt-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 space-y-3">
+                                <textarea
+                                  rows={2}
+                                  value={comments[q.id] || ''}
+                                  onChange={(e) => setComments(prev => ({ ...prev, [q.id]: e.target.value }))}
+                                  placeholder={activeRating[q.id] === 'bad'
+                                    ? "Explica brevemente por qué consideras incorrecto el reactivo..."
+                                    : "Escribe un comentario opcional sobre esta pregunta..."
+                                  }
+                                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-[rgb(var(--primary-500))] resize-none"
+                                />
+                                
+                                {feedbackError[q.id] && (
+                                  <p className="text-[10px] text-red-500 font-bold">{feedbackError[q.id]}</p>
+                                )}
+
+                                <div className="flex justify-end">
+                                  <button
+                                    type="button"
+                                    disabled={isSubmitting[q.id]}
+                                    onClick={() => handleSubmitFeedback(q.id, q.questionText)}
+                                    className="px-4 py-1.5 rounded-lg text-xs font-bold text-white bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] shadow transition-all active:scale-[0.98] disabled:opacity-50"
+                                  >
+                                    {isSubmitting[q.id] ? "Enviando..." : "Enviar Valoración"}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {submittedFeedback[q.id] && (
+                          <div className="mt-4 pt-2 border-t border-gray-100 dark:border-gray-700/50 flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 font-bold">
+                            <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span>¡Valoración enviada! Gracias por tu feedback.</span>
+                          </div>
+                        )}
                     </li>
                 );
             }
@@ -131,6 +256,79 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({ quiz, onGoBack, onRetak
                   <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
                     <h4 className="font-semibold text-sm text-gray-600 dark:text-gray-400">{t('justification')}</h4>
                     <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{decodeHtml(q.justification)}</p>
+                  </div>
+                )}
+
+                {/* Disagreement feedback evaluation panel */}
+                {currentUser && !submittedFeedback[q.id] && (
+                  <div className="mt-4 pt-3 border-t border-gray-150 dark:border-gray-750">
+                    <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
+                      ¿Difieres de la respuesta correcta o de la justificación? Valora esta pregunta:
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveRating(prev => ({ ...prev, [q.id]: prev[q.id] === 'good' ? undefined : 'good' }))}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border ${
+                          activeRating[q.id] === 'good'
+                            ? 'bg-green-500/10 border-green-500 text-green-600 dark:text-green-400 font-extrabold shadow-sm'
+                            : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:text-green-500 dark:hover:text-green-400'
+                        }`}
+                      >
+                        👍 Bien
+                      </button>
+                      
+                      <button
+                        type="button"
+                        onClick={() => setActiveRating(prev => ({ ...prev, [q.id]: prev[q.id] === 'bad' ? undefined : 'bad' }))}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border ${
+                          activeRating[q.id] === 'bad'
+                            ? 'bg-red-500/10 border-red-500 text-red-600 dark:text-red-400 font-extrabold shadow-sm'
+                            : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:text-red-500 dark:hover:text-red-400'
+                        }`}
+                      >
+                        👎 Mal
+                      </button>
+                    </div>
+
+                    {activeRating[q.id] && (
+                      <div className="mt-3 p-3 rounded-xl bg-gray-50 dark:bg-gray-900/40 border border-gray-100 dark:border-gray-800 space-y-3 animate-fade-in">
+                        <textarea
+                          rows={2}
+                          value={comments[q.id] || ''}
+                          onChange={(e) => setComments(prev => ({ ...prev, [q.id]: e.target.value }))}
+                          placeholder={activeRating[q.id] === 'bad'
+                            ? "Explica brevemente por qué consideras incorrecto el reactivo..."
+                            : "Escribe un comentario opcional sobre esta pregunta..."
+                          }
+                          className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-[rgb(var(--primary-500))] resize-none"
+                        />
+                        
+                        {feedbackError[q.id] && (
+                          <p className="text-[10px] text-red-500 font-bold">{feedbackError[q.id]}</p>
+                        )}
+
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            disabled={isSubmitting[q.id]}
+                            onClick={() => handleSubmitFeedback(q.id, q.questionText)}
+                            className="px-4 py-1.5 rounded-lg text-xs font-bold text-white bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] shadow transition-all active:scale-[0.98] disabled:opacity-50"
+                          >
+                            {isSubmitting[q.id] ? "Enviando..." : "Enviar Valoración"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {submittedFeedback[q.id] && (
+                  <div className="mt-4 pt-2 border-t border-gray-100 dark:border-gray-700/50 flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 font-bold">
+                    <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span>¡Valoración enviada! Gracias por tu feedback.</span>
                   </div>
                 )}
               </li>

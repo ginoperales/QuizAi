@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import QuizGenerator from './QuizGenerator';
 // FIX: Import QuizMode to use in the onQuizGenerated prop signature.
-import { Question, Difficulty, ExplanationStyle, QuizMode } from '../types';
+import { Question, Difficulty, ExplanationStyle, QuizMode, FirebaseUser } from '../types';
 import { UploadIcon, StarIcon, HistoryIcon, ClipboardDocumentIcon } from './icons';
 
 interface WelcomeViewProps {
-  // FIX: Add QuizMode to the onQuizGenerated prop signature to match the function in App.tsx.
+  currentUser: FirebaseUser | null;
+  onTriggerAuth: () => void;
   onQuizGenerated: (questions: Question[], difficulty: Difficulty, isTimed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => void;
   onGenerationFailed: (error: string) => void;
   setIsLoading: (isLoading: boolean) => void;

@@ -42,7 +42,7 @@ export interface ActiveQuiz {
     currentQuestionIndex: number;
     mode: QuizMode;
     userAnswers: { [questionId: string]: number }; // For MCQs
-    writtenUserAnswers?: { [questionId: string]: { text: string; score?: number; feedback?: string; isGraded: boolean } }; // For written
+    writtenUserAnswers?: { [questionId: string]: { text: string; score?: number; feedback?: string; isGraded: boolean; gradedBy?: 'ai' | 'local' } }; // For written
     savedExplanations?: { [questionId: string]: string[] };
 }
 
@@ -55,7 +55,7 @@ export interface CompletedQuiz {
     explanationStyle: ExplanationStyle;
     mode: QuizMode;
     userAnswers: { [questionId: string]: number };
-    writtenUserAnswers?: { [questionId: string]: { text: string; score: number; feedback: string; } };
+    writtenUserAnswers?: { [questionId: string]: { text: string; score: number; feedback: string; gradedBy?: 'ai' | 'local' } };
     savedExplanations?: { [questionId: string]: string[] };
     score: number;
     totalQuestions: number; // For MCQ: number of questions. For Written: number of questions * 100
@@ -68,7 +68,7 @@ export enum Difficulty {
   Hard = "Hard",
 }
 
-export type View = "generator" | "quiz" | "favorites" | "history" | "quizDetail" | "results" | "quizEditor" | "flashcards" | "statistics";
+export type View = "generator" | "quiz" | "favorites" | "history" | "quizDetail" | "results" | "quizEditor" | "flashcards" | "statistics" | "auth" | "publicQuizzes" | "adminDashboard" | "landing";
 
 export type Language = "en" | "es";
 
@@ -77,4 +77,58 @@ export type ThemeColor = 'indigo' | 'sky' | 'teal' | 'rose';
 export interface ThemeSettings {
     color: ThemeColor;
     mode: 'light' | 'dark';
+}
+
+export interface FirebaseUser {
+  uid: string;
+  email: string;
+  alias: string;
+  readableId: string; // Unique short readable ID generated at registration (e.g. QZ-1234)
+  role: 'admin' | 'student';
+  createdAt: string;
+  favoriteQuizzes?: string[]; // Array of public quiz IDs favorited by the user
+}
+
+export interface AppNotification {
+  id: string;
+  recipientUid: string;
+  senderAlias: string;
+  quizId: string;
+  quizName: string;
+  status: 'unread' | 'read';
+  createdAt: string;
+  type?: 'invitation' | 'question_feedback' | 'quiz_report'; // Type of notification
+  questionText?: string; // Text of the evaluated question (for feedback)
+  detailsText?: string; // Additional details (e.g. report reason or evaluation comment)
+}
+
+export interface FirestoreQuiz {
+  id: string;
+  name: string;
+  difficulty: Difficulty;
+  isTimed: boolean;
+  explanationStyle: ExplanationStyle;
+  mode: QuizMode;
+  questions: Question[];
+  creatorUid: string;
+  creatorAlias: string;
+  isPublic: boolean;
+  completerAliases?: string[];
+  createdAt: string;
+}
+
+export interface QuizAttempt {
+  id: string;
+  quizId: string;
+  quizName: string;
+  questions: Question[];
+  userUid: string;
+  userAlias: string;
+  score: number;
+  totalQuestions: number;
+  difficulty: Difficulty;
+  mode: QuizMode;
+  date: string;
+  userAnswers: { [questionId: string]: number };
+  writtenUserAnswers?: { [questionId: string]: { text: string; score: number; feedback: string; } };
 }

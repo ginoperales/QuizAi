@@ -1,17 +1,19 @@
 import React, { useState, useCallback } from 'react';
-import { Difficulty, Question, ExplanationStyle, QuizMode } from '../types';
+import { Difficulty, Question, ExplanationStyle, QuizMode, FirebaseUser } from '../types';
 import { generateQuestionsFromText, generateQuestionsFromImage } from '../services/geminiService';
 import { parseSpreadsheet, readFileAsText, readFileAsBase64, downloadExcelTemplate } from '../services/fileService';
 import { UploadIcon, DownloadIcon } from './icons';
 
 interface QuizGeneratorProps {
+  currentUser: FirebaseUser | null;
+  onTriggerAuth: () => void;
   onQuizGenerated: (questions: Question[], difficulty: Difficulty, isTimed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => void;
   onGenerationFailed: (error: string) => void;
   setIsLoading: (isLoading: boolean) => void;
   t: (key: any) => string;
 }
 
-const QuizGenerator: React.FC<QuizGeneratorProps> = ({ onQuizGenerated, onGenerationFailed, setIsLoading, t }) => {
+const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAuth, onQuizGenerated, onGenerationFailed, setIsLoading, t }) => {
   const [difficulty, setDifficulty] = useState<Difficulty>(Difficulty.Medium);
   const [file, setFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string>('');
@@ -23,12 +25,19 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ onQuizGenerated, onGenera
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-        setFile(selectedFile);
-        setFileName(selectedFile.name);
+      setFile(selectedFile);
+      setFileName(selectedFile.name);
     }
   };
 
   const handleGenerateClick = useCallback(async () => {
+    if (!currentUser) {
+      if (window.confirm("Debes iniciar sesión o registrarte para generar o subir un cuestionario. ¿Deseas hacerlo ahora?")) {
+        onTriggerAuth();
+      }
+      return;
+    }
+    
     if (!file) return;
 
     setIsLoading(true);

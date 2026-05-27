@@ -47,6 +47,15 @@ const SplashScreen: React.FC = () => {
           <div className="w-0 h-0.5 bg-[rgb(var(--primary-400))] mx-auto mt-2 animate-draw-line"></div>
         </div>
       </div>
+
+      <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center justify-center text-center animate-slide-up-fade-in opacity-0" style={{ animationDelay: '0.8s', animationFillMode: 'forwards' }}>
+        <p className="text-[10px] text-gray-500 tracking-[0.25em] font-semibold uppercase">
+          Un producto de
+        </p>
+        <p className="text-xs text-gray-400 tracking-[0.3em] font-bold mt-1.5 uppercase">
+          SV GROUP / SV LAB
+        </p>
+      </div>
     </div>
   );
 };

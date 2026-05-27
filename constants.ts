@@ -1,10 +1,10 @@
 import { Difficulty, ExplanationStyle } from './types';
 
-export const APP_TITLE = "AI Quiz Generator Pro";
+export const APP_TITLE = "Quiz AI";
 
 export const LOCALIZED_STRINGS = {
   en: {
-    APP_TITLE: "AI Quiz Generator Pro",
+    APP_TITLE: "Quiz AI",
     name: "Name",
     tagline: "Generate engaging quizzes from your documents instantly.",
     uploadFile: "Upload Document",
@@ -29,6 +29,7 @@ export const LOCALIZED_STRINGS = {
     errorTitle: "An Error Occurred",
     errorParsingFile: "Could not read or parse the file. Please check the format.",
     errorGeneratingQuiz: "Failed to generate quiz. Please try again.",
+    errorGradingAnswer: "Could not grade your answer. Please check your API key configuration.",
     [Difficulty.Easy]: "Easy",
     [Difficulty.Medium]: "Medium",
     [Difficulty.Hard]: "Hard",
@@ -90,7 +91,7 @@ export const LOCALIZED_STRINGS = {
     flip: "Flip",
     createYourQuiz: "Create Your Quiz",
     enableTimer: "Enable Timer per Question",
-    welcomeTitle: "Welcome to AI Quiz Generator Pro",
+    welcomeTitle: "Welcome to Quiz AI",
     welcomeFeature1Title: "Upload Any Document",
     welcomeFeature1Desc: "Use text files, spreadsheets, or even images. Our AI will analyze the content and create questions.",
     welcomeFeature2Title: "Save & Organize",
@@ -162,7 +163,7 @@ export const LOCALIZED_STRINGS = {
     explanationColumn: "Explanation {n}",
   },
   es: {
-    APP_TITLE: "AI Quiz Generator Pro",
+    APP_TITLE: "Quiz AI",
     name: "Nombre",
     tagline: "Genera cuestionarios atractivos a partir de tus documentos al instante.",
     uploadFile: "Subir Documento",
@@ -187,6 +188,7 @@ export const LOCALIZED_STRINGS = {
     errorTitle: "Ocurrió un Error",
     errorParsingFile: "No se pudo leer o analizar el archivo. Por favor, revisa el formato.",
     errorGeneratingQuiz: "No se pudo generar el cuestionario. Por favor, inténtalo de nuevo.",
+    errorGradingAnswer: "No se pudo calificar tu respuesta. Por favor, verifica la configuración de tu clave de API.",
     [Difficulty.Easy]: "Fácil",
     [Difficulty.Medium]: "Medio",
     [Difficulty.Hard]: "Difícil",
@@ -248,7 +250,7 @@ export const LOCALIZED_STRINGS = {
     flip: "Voltear",
     createYourQuiz: "Crea Tu Cuestionario",
     enableTimer: "Activar Temporizador por Pregunta",
-    welcomeTitle: "Bienvenido a AI Quiz Generator Pro",
+    welcomeTitle: "Bienvenido a Quiz AI",
     welcomeFeature1Title: "Sube Cualquier Documento",
     welcomeFeature1Desc: "Usa archivos de texto, hojas de cálculo o incluso imágenes. Nuestra IA analizará el contenido y creará preguntas.",
     welcomeFeature2Title: "Guarda y Organiza",

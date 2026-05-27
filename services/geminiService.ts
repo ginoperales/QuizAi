@@ -274,3 +274,42 @@ export const getDeeperExplanation = async (
     throw new Error("Failed to get explanation from AI.");
   }
 };
+
+export const calculateLocalSimilarity = (userAnswer: string, referenceText: string): number => {
+  const clean = (text: string) => {
+    return text
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // Remove accents
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "") // Remove punctuation
+      .split(/\s+/)
+      .filter(w => w.length > 2); // Only words longer than 2 chars
+  };
+
+  const userWords = clean(userAnswer);
+  const refWords = clean(referenceText);
+
+  if (userWords.length === 0 || refWords.length === 0) return 0;
+
+  // Count intersections
+  const userSet = new Set(userWords);
+  let intersectionCount = 0;
+  
+  refWords.forEach(w => {
+    if (userSet.has(w)) {
+      intersectionCount++;
+    }
+  });
+
+  // Calculate Jaccard coefficient or simple ratio
+  const unionCount = new Set([...userWords, ...refWords]).size;
+  const jaccard = intersectionCount / unionCount;
+  
+  // Also calculate overlap relative to the shorter text
+  const minWords = Math.min(userWords.length, refWords.length);
+  const overlapRatio = intersectionCount / minWords;
+  
+  // Combined score (weighted average)
+  const score = Math.round((jaccard * 0.4 + overlapRatio * 0.6) * 100);
+  return Math.min(100, Math.max(0, score));
+};
