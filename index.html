@@ -1,10 +1,63 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Quiz AI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- =========================================
+         FAVICON & APP ICONS
+    ========================================== -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/icon-192.png?v=2" />
+    <!-- Fallback ico not needed since SVG favicon works in all modern browsers -->
+
+    <!-- =========================================
+         PWA MANIFEST
+    ========================================== -->
+    <link rel="manifest" href="/manifest.webmanifest?v=2" />
+
+    <!-- =========================================
+         SEO & META
+    ========================================== -->
+    <title>Quiz AI — Cuestionarios con Inteligencia Artificial</title>
+    <meta name="description" content="Crea, comparte y juega cuestionarios educativos potenciados por Gemini AI. Sube documentos, imágenes de tus apuntes o Excel y genera retos al instante." />
+    <meta name="author" content="SV GROUP / SV LAB" />
+    <meta name="keywords" content="quiz, cuestionarios, inteligencia artificial, gemini, educación, aprendizaje" />
+
+    <!-- =========================================
+         PWA / MOBILE META TAGS
+    ========================================== -->
+    <!-- Chrome, Firefox OS, Opera -->
+    <meta name="theme-color" content="#4F46E5" />
+    <!-- iOS Safari — makes app fullscreen when added to home screen -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Quiz AI" />
+    <!-- Android -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="Quiz AI" />
+    <!-- Microsoft Tiles -->
+    <meta name="msapplication-TileColor" content="#4F46E5" />
+    <meta name="msapplication-TileImage" content="/icon-192.png?v=2" />
+
+    <!-- =========================================
+         OPEN GRAPH (sharing previews)
+    ========================================== -->
+    <meta property="og:title" content="Quiz AI — Cuestionarios con IA" />
+    <meta property="og:description" content="Crea cuestionarios inteligentes con Gemini AI. Sube documentos y genera retos educativos al instante." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/icon-512.png?v=2" />
+    <meta property="og:locale" content="es_PE" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Quiz AI" />
+    <meta name="twitter:description" content="Cuestionarios educativos con Inteligencia Artificial" />
+    <meta name="twitter:image" content="/icon-512.png?v=2" />
+
+    <!-- =========================================
+         SCRIPTS & STYLES
+    ========================================== -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -42,5 +95,22 @@
   <body class="bg-gray-100 dark:bg-gray-900">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
+
+    <!-- =========================================
+         SERVICE WORKER REGISTRATION (PWA)
+    ========================================== -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function() {
+          navigator.serviceWorker.register('/sw.js')
+            .then(function(registration) {
+              console.log('[QuizAI] Service Worker registrado con éxito:', registration.scope);
+            })
+            .catch(function(err) {
+              console.warn('[QuizAI] Service Worker: fallo al registrar:', err);
+            });
+        });
+      }
+    </script>
   </body>
 </html>

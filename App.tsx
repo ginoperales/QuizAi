@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 // FIX: Add Difficulty to imports for type safety in handleQuizGenerated
 import { Question, View, Language, ActiveQuiz, CompletedQuiz, ThemeSettings, ThemeColor, ExplanationStyle, QuizMode, Difficulty, FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification } from './types';
 import { APP_TITLE, LOCALIZED_STRINGS } from './constants';
@@ -40,6 +40,14 @@ const App: React.FC = () => {
   // Animated transitions states
   const [showWelcomeOverlay, setShowWelcomeOverlay] = useState<string | null>(null);
   const [showFarewellOverlay, setShowFarewellOverlay] = useState<string | null>(null);
+  // Prevents onAuthStateChanged from navigating while manual login overlay is active
+  const isManualLoginRef = useRef(false);
+  // Mobile hamburger menu
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // PWA install prompt
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
   
   // Notification states
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -112,6 +120,33 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, []);
 
+  // Capture PWA install prompt
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+      setShowInstallBanner(true);
+    };
+    window.addEventListener('beforeinstallprompt', handler as EventListener);
+    window.addEventListener('appinstalled', () => {
+      setShowInstallBanner(false);
+      setDeferredInstallPrompt(null);
+    });
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler as EventListener);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBanner(false);
+      setDeferredInstallPrompt(null);
+    }
+  };
+
   // Track Firebase Auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -147,8 +182,10 @@ const App: React.FC = () => {
           setCurrentUser(profile);
           setFavoriteQuizzes(profile?.favoriteQuizzes || []);
           
-          // Re-route to generator but don't force if we already have it
-          setCurrentView('generator'); 
+          // Only navigate if not in middle of a manual login (which handles its own navigation)
+          if (!isManualLoginRef.current) {
+            setCurrentView('generator');
+          }
           
           if (profile) {
             const dbAttempts = await getUserAttempts(profile.uid);
@@ -701,11 +738,13 @@ const App: React.FC = () => {
               localStorage.removeItem('activeQuiz');
               localStorage.removeItem('pausedQuizzes');
               
-              // Navigate immediately so the screen is ready, then show welcome overlay on top
+              // Block onAuthStateChanged from navigating while overlay is showing
+              isManualLoginRef.current = true;
               setCurrentView('generator');
               setShowWelcomeOverlay(profile.alias);
               setTimeout(() => {
                 setShowWelcomeOverlay(null);
+                isManualLoginRef.current = false;
               }, 2500);
             }} 
             onGoBack={() => setCurrentView('landing')}
@@ -884,7 +923,65 @@ const App: React.FC = () => {
     <div className="flex flex-col min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans transition-colors duration-300">
       <header className="bg-white dark:bg-gray-800 shadow-md">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+
+          {/* === MOBILE HEADER (visible only on xs screens) === */}
+          <div className="flex sm:hidden items-center justify-between h-14">
+            <div className="flex items-center gap-2">
+              <BookOpenIcon className="h-7 w-7 text-[rgb(var(--primary-500))]" />
+              <span className="text-base font-bold text-gray-800 dark:text-white">{APP_TITLE}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {currentUser && (
+                <div className="relative">
+                  <button onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+                    className="relative p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-white rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                    aria-label="Notificaciones">
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                    {notifications.filter(n => n.status === 'unread').length > 0 && (
+                      <span className="absolute top-0.5 right-0.5 block h-2 w-2 rounded-full bg-red-500 ring-1 ring-white dark:ring-gray-800" />
+                    )}
+                  </button>
+                  {isNotificationsOpen && (
+                    <div className="absolute right-0 mt-2 w-72 backdrop-blur-lg bg-white/95 dark:bg-gray-900/95 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-2xl z-50 py-3 overflow-hidden">
+                      <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
+                        <span className="font-bold text-sm">Notificaciones</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-bold">{notifications.filter(n => n.status === 'unread').length} nuevas</span>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto">
+                        {notifications.length === 0 ? (
+                          <p className="p-4 text-center text-xs text-gray-400">Sin notificaciones.</p>
+                        ) : notifications.map(n => {
+                          const isReport = n.type === 'quiz_report'; const isFeedback = n.type === 'question_feedback'; const isInvite = !n.type || n.type === 'invitation';
+                          return (
+                            <div key={n.id} className={`p-3 border-b border-gray-100 dark:border-gray-800 ${n.status === 'unread' ? 'bg-primary-50/30' : 'opacity-60'}`}>
+                              <p className="text-xs font-bold">{isReport ? '🚨 Reportado' : isFeedback ? '⚠️ Feedback' : `🚀 Reto de @${n.senderAlias}`}</p>
+                              <p className="text-[10px] text-gray-500 truncate">{n.quizName}</p>
+                              <div className="flex gap-1 mt-1">
+                                {isInvite && <button onClick={() => handleAcceptInvite(n)} className="text-[10px] px-2 py-0.5 rounded bg-[rgb(var(--primary-600))] text-white font-bold">Aceptar</button>}
+                                {isReport && <button onClick={() => { setCurrentView('adminDashboard'); setIsNotificationsOpen(false); handleMarkAsRead(n.id); }} className="text-[10px] px-2 py-0.5 rounded bg-red-600 text-white font-bold">Admin</button>}
+                                {n.status === 'unread' && <button onClick={() => handleMarkAsRead(n.id)} className="text-[10px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500">Leído</button>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!currentUser && (
+                <button onClick={() => setCurrentView('auth')}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] shadow active:scale-95">
+                  Entrar
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* === DESKTOP HEADER (hidden on mobile) === */}
+          <div className="hidden sm:flex items-center justify-between h-16">
             <div className="flex items-center space-x-2">
               <BookOpenIcon className="h-8 w-8 text-[rgb(var(--primary-500))]" />
               <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white">{APP_TITLE}</h1>
@@ -1081,23 +1178,147 @@ const App: React.FC = () => {
               )}
             </div>
           </div>
+          {/* end desktop header */}
+
         </div>
       </header>
 
-      <nav className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-10">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 flex justify-center space-x-4 sm:space-x-8">
-            {navItems.map(item => (
-                <button
-                    key={item.view}
-                    onClick={() => handleNavClick(item.view as View)}
-                    className={`flex items-center space-x-2 px-3 py-4 text-sm font-medium border-b-2 transition-colors duration-200 ${currentView === item.view || (currentView === 'quiz' && item.view === 'generator') || ((currentView === 'quizDetail' || currentView === 'quizEditor' || currentView === 'flashcards') && item.view === 'history') ? 'border-[rgb(var(--primary-500))] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]' : 'border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-700 dark:hover:text-gray-100'}`}
-                >
-                    {item.icon}
-                    <span>{item.label}</span>
-                </button>
-            ))}
+      {/* ===== NAV: inline tabs ≤2 items | hamburger >2 items on mobile ===== */}
+      <nav className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-30">
+        {/* Desktop: always show tabs */}
+        <div className="hidden sm:flex container mx-auto px-4 sm:px-6 lg:px-8 justify-center space-x-4 sm:space-x-8">
+          {navItems.map(item => (
+            <button key={item.view} onClick={() => handleNavClick(item.view as View)}
+              className={`flex items-center space-x-2 px-3 py-4 text-sm font-medium border-b-2 transition-colors duration-200 ${
+                currentView === item.view || (currentView === 'quiz' && item.view === 'generator') || ((currentView === 'quizDetail' || currentView === 'quizEditor' || currentView === 'flashcards') && item.view === 'history')
+                  ? 'border-[rgb(var(--primary-500))] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'
+                  : 'border-transparent text-gray-500 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-700 dark:hover:text-gray-100'}`}>
+              {item.icon}<span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Mobile nav */}
+        <div className="sm:hidden">
+          {navItems.length <= 2 ? (
+            /* Unauthenticated: 2 tabs fit fine, show inline */
+            <div className="flex">
+              {navItems.map(item => {
+                const active = currentView === item.view;
+                return (
+                  <button key={item.view} onClick={() => handleNavClick(item.view as View)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                      active ? 'border-[rgb(var(--primary-500))] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'
+                             : 'border-transparent text-gray-500 dark:text-gray-400'}`}>
+                    {item.icon}<span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            /* Authenticated: many items + user actions → hamburger */
+            <>
+              <button onClick={() => setIsMobileMenuOpen(o => !o)}
+                className="w-full flex items-center justify-between px-4 py-3"
+                aria-label="Menu">
+                <span className="flex items-center gap-2 text-sm font-semibold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">
+                  {navItems.find(i => i.view === currentView || (currentView === 'quiz' && i.view === 'generator') || (['quizDetail','quizEditor','flashcards'].includes(currentView) && i.view === 'history'))?.icon}
+                  {navItems.find(i => i.view === currentView || (currentView === 'quiz' && i.view === 'generator') || (['quizDetail','quizEditor','flashcards'].includes(currentView) && i.view === 'history'))?.label || 'Menú'}
+                </span>
+                <svg className={`h-5 w-5 text-gray-500 transition-transform ${isMobileMenuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {isMobileMenuOpen && (
+                <div className="border-t border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg pb-3">
+                  {/* Nav items */}
+                  {navItems.map(item => {
+                    const active = currentView === item.view || (currentView === 'quiz' && item.view === 'generator') || (['quizDetail','quizEditor','flashcards'].includes(currentView) && item.view === 'history');
+                    return (
+                      <button key={item.view} onClick={() => { handleNavClick(item.view as View); setIsMobileMenuOpen(false); }}
+                        className={`w-full flex items-center gap-3 px-5 py-3 text-sm font-medium border-l-4 transition-colors ${
+                          active ? 'border-[rgb(var(--primary-500))] bg-[rgba(var(--primary-500),0.06)] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'
+                                 : 'border-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}>
+                        <span className={active ? 'text-[rgb(var(--primary-500))]' : 'text-gray-400'}>{item.icon}</span>
+                        {item.label}
+                      </button>
+                    );
+                  })}
+
+                  {/* Divider + user account actions */}
+                  {currentUser && (
+                    <div className="mt-1 pt-2 mx-4 border-t border-gray-100 dark:border-gray-700 space-y-2">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Mi Cuenta</p>
+                      <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+                        @{currentUser.alias} <span className="font-mono text-xs text-gray-400">({currentUser.readableId})</span>
+                      </p>
+                      <div className="flex gap-2">
+                        {currentUser.role === 'admin' && (
+                          <button onClick={() => { setCurrentView('adminDashboard'); setIsMobileMenuOpen(false); }}
+                            className={`relative flex-1 py-2 text-xs font-bold rounded-lg border transition-all ${
+                              currentView === 'adminDashboard'
+                                ? 'bg-[rgb(var(--primary-600))] text-white border-transparent'
+                                : 'border-[rgb(var(--primary-500))] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'}`}>
+                            Admin Panel
+                            {pendingReportsCount > 0 && (
+                              <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-extrabold text-white">{pendingReportsCount}</span>
+                            )}
+                          </button>
+                        )}
+                        <button onClick={async () => {
+                          setIsMobileMenuOpen(false);
+                          const alias = currentUser?.alias || 'Usuario';
+                          setShowFarewellOverlay(alias);
+                          setTimeout(async () => {
+                            await logoutUser(); setCurrentUser(null); setFavoriteQuizzes([]);
+                            setShowFarewellOverlay(null); setCurrentView('landing');
+                          }, 2000);
+                        }} className="flex-1 py-2 text-xs font-bold rounded-lg bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500 hover:text-white transition-all">
+                          Cerrar Sesión
+                        </button>
+                      </div>
+                      <button onClick={() => { setIsSettingsOpen(true); setIsMobileMenuOpen(false); }}
+                        className="w-full py-2 text-xs font-medium text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-all flex items-center justify-center gap-1.5">
+                        <Cog6ToothIcon className="h-4 w-4" /> Configuración
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </nav>
+
+      {/* PWA Install Banner */}
+      {showInstallBanner && (
+        <div className="fixed bottom-4 left-4 right-4 z-50 sm:left-auto sm:right-6 sm:w-80 animate-slide-up-fade-in">
+          <div className="backdrop-blur-md bg-white/95 dark:bg-gray-800/95 border border-[rgba(var(--primary-500),0.3)] rounded-2xl shadow-2xl p-4 flex items-center gap-3">
+            <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-gradient-to-br from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] flex items-center justify-center shadow">
+              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-gray-900 dark:text-white">Instalar Quiz AI</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Accédelo como app desde tu celular</p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button onClick={handleInstallApp}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] shadow transition-all active:scale-95">
+                Instalar
+              </button>
+              <button onClick={() => setShowInstallBanner(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1" aria-label="Cerrar">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="flex-grow container mx-auto p-4 sm:p-6 lg:p-8">
         {renderContent()}
