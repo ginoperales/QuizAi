@@ -30,7 +30,16 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
 
   const allQuizzes = useMemo(() => {
     const completed = completedHistory.map(q => ({...q, type: 'completed' as const, dateValue: new Date(q.date) }));
-    const paused = pausedHistory.map(q => ({...q, type: 'paused' as const, dateValue: new Date(parseInt(q.id)) }));
+    const paused = pausedHistory.map(q => {
+      const parsedId = parseInt(q.id);
+      const isTimestamp = !isNaN(parsedId) && String(parsedId).length >= 10;
+      const dateValue = isTimestamp ? new Date(parsedId) : new Date();
+      return {
+        ...q,
+        type: 'paused' as const,
+        dateValue
+      };
+    });
     
     return [...completed, ...paused].sort((a, b) => b.dateValue.getTime() - a.dateValue.getTime());
   }, [completedHistory, pausedHistory]);
@@ -115,7 +124,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
 
     if (quiz.type === 'paused') {
         const score = quiz.mode === 'Written'
-            ? Object.values(quiz.writtenUserAnswers || {}).reduce((sum, a) => sum + (a.score || 0), 0)
+            ? Object.values(quiz.writtenUserAnswers || {}).map(a => a as { score?: number }).reduce((sum, a) => sum + (a.score || 0), 0)
             : Object.keys(quiz.userAnswers).reduce((acc, qId) => {
                 const question = quiz.questions.find(q => q.id === qId);
                 if (question && quiz.userAnswers[qId] === question.correctAnswerIndex) {

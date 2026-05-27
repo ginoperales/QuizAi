@@ -44,6 +44,9 @@ export interface ActiveQuiz {
     userAnswers: { [questionId: string]: number }; // For MCQs
     writtenUserAnswers?: { [questionId: string]: { text: string; score?: number; feedback?: string; isGraded: boolean; gradedBy?: 'ai' | 'local' } }; // For written
     savedExplanations?: { [questionId: string]: string[] };
+    notificationId?: string; // ID of the resume notification in Firestore
+    creatorUid?: string; // UID of the quiz creator
+    creatorAlias?: string; // Alias of the quiz creator
 }
 
 export interface CompletedQuiz {
@@ -77,6 +80,8 @@ export type ThemeColor = 'indigo' | 'sky' | 'teal' | 'rose';
 export interface ThemeSettings {
     color: ThemeColor;
     mode: 'light' | 'dark';
+    autoReadAloud?: boolean;
+    soundEnabled?: boolean;
 }
 
 export interface FirebaseUser {
@@ -87,6 +92,8 @@ export interface FirebaseUser {
   role: 'admin' | 'student';
   createdAt: string;
   favoriteQuizzes?: string[]; // Array of public quiz IDs favorited by the user
+  activeQuizProgress?: ActiveQuiz | null; // Current active/unsaved progress
+  pausedQuizzes?: ActiveQuiz[]; // Paused/saved quizzes
 }
 
 export interface AppNotification {
@@ -97,7 +104,7 @@ export interface AppNotification {
   quizName: string;
   status: 'unread' | 'read';
   createdAt: string;
-  type?: 'invitation' | 'question_feedback' | 'quiz_report'; // Type of notification
+  type?: 'invitation' | 'question_feedback' | 'quiz_report' | 'resume_progress'; // Type of notification
   questionText?: string; // Text of the evaluated question (for feedback)
   detailsText?: string; // Additional details (e.g. report reason or evaluation comment)
 }

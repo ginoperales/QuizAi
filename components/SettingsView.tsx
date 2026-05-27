@@ -43,7 +43,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({ isOpen, onClose, settings, 
             ))}
           </div>
         </div>
-
         {/* Appearance (Light/Dark Mode) Selection */}
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{t('appearance')}</label>
@@ -72,7 +71,50 @@ const SettingsView: React.FC<SettingsViewProps> = ({ isOpen, onClose, settings, 
             </div>
           </fieldset>
         </div>
+
+        {/* Automatic Voice Readout Switch */}
+        <div className="flex items-center justify-between py-3 border-t border-gray-200 dark:border-gray-750">
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-gray-800 dark:text-white">{t('autoReadAloud')}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Lee las preguntas automáticamente al iniciar</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSettingsChange({ ...settings, autoReadAloud: !settings.autoReadAloud })}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out outline-none ring-2 ring-offset-2 ring-transparent focus:ring-[rgb(var(--primary-500))] ${
+              settings.autoReadAloud ? 'bg-[rgb(var(--primary-600))]' : 'bg-gray-200 dark:bg-gray-600'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                settings.autoReadAloud ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Sound Effects Switch */}
+        <div className="flex items-center justify-between py-3 border-t border-b border-gray-200 dark:border-gray-750">
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-gray-800 dark:text-white">{t('soundEffects')}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Efectos interactivos de aciertos y errores</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onSettingsChange({ ...settings, soundEnabled: settings.soundEnabled === false ? true : false })}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out outline-none ring-2 ring-offset-2 ring-transparent focus:ring-[rgb(var(--primary-500))] ${
+              settings.soundEnabled !== false ? 'bg-[rgb(var(--primary-600))]' : 'bg-gray-200 dark:bg-gray-600'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                settings.soundEnabled !== false ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
       </div>
+
       <div className="mt-6 flex justify-end">
         <button
           type="button"

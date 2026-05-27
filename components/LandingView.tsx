@@ -4,9 +4,10 @@ import { FirebaseUser } from '../types';
 interface LandingViewProps {
   currentUser: FirebaseUser | null;
   onStart: () => void;
+  t: (key: any) => string;
 }
 
-const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
+const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart, t }) => {
   return (
     <div className="space-y-16 max-w-6xl mx-auto my-6 px-4">
       {/* Hero Section */}
@@ -18,11 +19,11 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
         </span>
 
         <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] dark:from-[rgb(var(--primary-400))] dark:to-[rgb(var(--primary-200))] leading-tight max-w-4xl mx-auto">
-          Transforma Cualquier Contenido en Cuestionarios Interactivos
+          {t('landingTitle')}
         </h1>
         
         <p className="text-lg sm:text-xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto font-medium leading-relaxed">
-          QuizAI es una plataforma avanzada que te permite subir documentos, hojas de cálculo o imágenes de tus apuntes para crear retos educativos con explicaciones profundas e IA calificadora de respuestas.
+          {t('landingTagline')}
         </p>
 
         <div className="pt-6">
@@ -30,7 +31,7 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
             onClick={onStart}
             className="px-8 py-4 rounded-2xl text-lg font-bold text-white bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] shadow-lg shadow-[rgba(var(--primary-500),0.3)] hover:shadow-xl hover:-translate-y-0.5 transition-all transform active:scale-[0.98] cursor-pointer inline-flex items-center gap-3"
           >
-            {currentUser ? "Ir a Crear Cuestionarios" : "Comenzar Ahora - Iniciar Sesión"}
+            {currentUser ? t('landingButtonCreate') : t('landingButtonLogin')}
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
             </svg>
@@ -41,8 +42,8 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
       {/* Feature Grid */}
       <div className="space-y-8">
         <div className="text-center space-y-2">
-          <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white">¿Qué puedes hacer con QuizAI?</h2>
-          <p className="text-gray-500 dark:text-gray-400 max-w-xl mx-auto">Explora las herramientas que hemos diseñado para llevar tu aprendizaje al siguiente nivel.</p>
+          <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white">{t('whatCanYouDo')}</h2>
+          <p className="text-gray-500 dark:text-gray-400 max-w-xl mx-auto">{t('whatCanYouDoDesc')}</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -54,9 +55,9 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white">Generación con IA</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white">{t('feature1Title')}</h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                Sube archivos de texto, fotos de tus apuntes o plantillas Excel y genera cuestionarios estructurados al instante.
+                {t('feature1Desc')}
               </p>
             </div>
           </div>
@@ -69,9 +70,9 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white">Modo Escrito e IA</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white">{t('feature2Title')}</h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                Responde preguntas con tus palabras. Gemini evaluará el significado y te dará notas y justificaciones formativas.
+                {t('feature2Desc')}
               </p>
             </div>
           </div>
@@ -84,9 +85,9 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white">Retos Públicos</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white">{t('feature3Title')}</h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                Comparte tus cuestionarios con el público para que otros alumnos demuestren su conocimiento y aparezcan en tu reto.
+                {t('feature3Desc')}
               </p>
             </div>
           </div>
@@ -99,20 +100,20 @@ const LandingView: React.FC<LandingViewProps> = ({ currentUser, onStart }) => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white">Historial y Flashcards</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white">{t('feature4Title')}</h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                Guarda tus favoritos, repasa estadísticas detalladas de tu aprendizaje y estudia tus errores usando flashcards dinámicas.
+                {t('feature4Desc')}
               </p>
             </div>
           </div>
-          </div>
         </div>
+      </div>
 
       {/* Social Media Section */}
       <div className="backdrop-blur-md bg-white/50 dark:bg-gray-800/40 border border-white/20 dark:border-gray-700/20 shadow-xl rounded-3xl p-8 max-w-4xl mx-auto text-center space-y-6 animate-slide-up-fade-in">
         <div className="space-y-2">
-          <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white">Redes Sociales</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Sigue nuestros canales oficiales de SV GROUP para enterarte de novedades, proyectos e innovaciones tecnológicas.</p>
+          <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white">{t('socialNetworks')}</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{t('socialNetworksDesc')}</p>
         </div>
         
         <div className="flex flex-wrap justify-center items-center gap-4 pt-2">

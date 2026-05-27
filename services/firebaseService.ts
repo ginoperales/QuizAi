@@ -22,7 +22,7 @@ import {
   limit, 
   addDoc 
 } from 'firebase/firestore';
-import { FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification } from '../types';
+import { FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification, ActiveQuiz } from '../types';
 
 const firebaseConfig = {
   projectId: "quizais",
@@ -229,7 +229,8 @@ export const uploadQuiz = async (quiz: Omit<FirestoreQuiz, 'createdAt'>): Promis
       completerAliases: quiz.completerAliases || [],
       createdAt: new Date().toISOString()
     };
-    await setDoc(doc(db, 'quizzes', quiz.id), quizDoc);
+    const sanitized = sanitizeForFirestore(quizDoc);
+    await setDoc(doc(db, 'quizzes', quiz.id), sanitized);
 
     // Log quiz sharing activity
     await logActivity(
@@ -282,7 +283,8 @@ export const deleteQuiz = async (quizId: string): Promise<void> => {
 export const saveQuizAttempt = async (attempt: Omit<QuizAttempt, 'id'>): Promise<QuizAttempt> => {
   try {
     const attemptsRef = collection(db, 'attempts');
-    const newDocRef = await addDoc(attemptsRef, attempt);
+    const sanitized = sanitizeForFirestore(attempt);
+    const newDocRef = await addDoc(attemptsRef, sanitized);
     
     const finalAttempt: QuizAttempt = {
       ...attempt,
@@ -681,4 +683,97 @@ export const getQuestionFeedback = async (): Promise<any[]> => {
     return [];
   }
 };
+
+// ACTIVE PROGRESS & PAUSED QUIZZES SYNCING
+export const updateActiveQuizProgress = async (uid: string, activeQuiz: ActiveQuiz | null): Promise<void> => {
+  try {
+    const userRef = doc(db, 'users', uid);
+    const sanitized = activeQuiz ? sanitizeForFirestore(activeQuiz) : null;
+    await updateDoc(userRef, { activeQuizProgress: sanitized });
+  } catch (err) {
+    console.error("Error updating active quiz progress in Firestore:", err);
+  }
+};
+
+export const updatePausedQuizzesInDb = async (uid: string, pausedQuizzes: ActiveQuiz[]): Promise<void> => {
+  try {
+    const userRef = doc(db, 'users', uid);
+    const sanitized = pausedQuizzes.map(q => sanitizeForFirestore(q));
+    await updateDoc(userRef, { pausedQuizzes: sanitized });
+  } catch (err) {
+    console.error("Error updating paused quizzes in Firestore:", err);
+  }
+};
+
+export const createResumeNotification = async (
+  uid: string,
+  senderAlias: string,
+  quizId: string,
+  quizName: string,
+  initialDetails: string
+): Promise<string> => {
+  try {
+    const notificationsRef = collection(db, 'notifications');
+    const newDocRef = await addDoc(notificationsRef, {
+      recipientUid: uid,
+      senderAlias,
+      quizId,
+      quizName,
+      status: 'unread',
+      type: 'resume_progress',
+      detailsText: initialDetails,
+      createdAt: new Date().toISOString()
+    });
+    await updateDoc(newDocRef, { id: newDocRef.id });
+    return newDocRef.id;
+  } catch (error) {
+    console.error("Error creating resume notification:", error);
+    throw error;
+  }
+};
+
+export const updateResumeNotificationDetails = async (notificationId: string, details: string): Promise<void> => {
+  try {
+    const docRef = doc(db, 'notifications', notificationId);
+    await updateDoc(docRef, { detailsText: details });
+  } catch (error) {
+    console.error("Error updating resume notification details in Firestore:", error);
+  }
+};
+
+export const deleteNotificationFromDb = async (notificationId: string): Promise<void> => {
+  try {
+    const docRef = doc(db, 'notifications', notificationId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error("Error deleting notification from Firestore:", error);
+  }
+};
+
+/**
+ * Recursively removes any property with a value of 'undefined' from an object/array,
+ * so it is safe to write to Firestore (which throws errors on 'undefined' fields).
+ */
+export function sanitizeForFirestore<T>(obj: T): T {
+  if (obj === null || obj === undefined) {
+    return null as any;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeForFirestore(item)) as any;
+  }
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        const val = (obj as any)[key];
+        if (val !== undefined) {
+          sanitized[key] = sanitizeForFirestore(val);
+        }
+      }
+    }
+    return sanitized;
+  }
+  return obj;
+}
+
 

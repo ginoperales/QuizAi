@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Question, Difficulty, Language, ActiveQuiz, ExplanationStyle } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Question, Difficulty, Language, ActiveQuiz, ExplanationStyle, FirebaseUser } from '../types';
 import { getDeeperExplanation } from '../services/geminiService';
 import { decodeHtml } from '../services/fileService';
+import { submitQuestionFeedback } from '../services/firebaseService';
 import { StarIcon, FilledStarIcon, SpeakerWaveIcon, StopCircleIcon, LightBulbIcon, RefreshIcon } from './icons';
+import { playCorrectSound, playIncorrectSound } from '../services/soundService';
 
 interface QuizViewProps {
   activeQuiz: ActiveQuiz;
@@ -13,6 +15,9 @@ interface QuizViewProps {
   onComplete: () => void;
   onSaveAndExit: () => void;
   language: Language;
+  autoReadAloud: boolean;
+  soundEnabled: boolean;
+  currentUser: FirebaseUser | null;
 }
 
 const TIME_LIMITS: Record<Difficulty, number> = {
@@ -21,7 +26,19 @@ const TIME_LIMITS: Record<Difficulty, number> = {
     [Difficulty.Hard]: 10,
 };
 
-const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavorite, t, onUpdate, onComplete, language, onSaveAndExit }) => {
+const QuizView: React.FC<QuizViewProps> = ({ 
+  activeQuiz, 
+  toggleFavorite, 
+  isFavorite, 
+  t, 
+  onUpdate, 
+  onComplete, 
+  language, 
+  onSaveAndExit,
+  autoReadAloud,
+  soundEnabled,
+  currentUser
+}) => {
   const { questions, currentQuestionIndex, userAnswers, difficulty, isTimed, explanationStyle } = activeQuiz;
   
   const currentQuestion = questions[currentQuestionIndex];
@@ -36,16 +53,80 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
   const [isExplanationLoading, setIsExplanationLoading] = useState(false);
   const [modalExplanationStyle, setModalExplanationStyle] = useState<ExplanationStyle>(explanationStyle);
   const [isExplanationSaved, setIsExplanationSaved] = useState(false);
+  
+  // Custom interactive animations state
+  const [submitFeedback, setSubmitFeedback] = useState<'correct' | 'incorrect' | 'timeout' | null>(null);
 
   const timeLimit = TIME_LIMITS[difficulty];
   const [timeLeft, setTimeLeft] = useState(timeLimit);
   
   const [shuffledOptions, setShuffledOptions] = useState<string[]>([]);
   const [shuffledCorrectAnswerIndex, setShuffledCorrectAnswerIndex] = useState<number>(0);
+  
+  // Feedback states
+  const [ratedStatus, setRatedStatus] = useState<'good' | 'bad' | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackComment, setFeedbackComment] = useState('');
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+
+  useEffect(() => {
+    setRatedStatus(null);
+  }, [currentQuestionIndex]);
+
+  const handleRateGood = async () => {
+    setRatedStatus('good');
+    try {
+      await submitQuestionFeedback(
+        activeQuiz.id,
+        activeQuiz.name || t('untitledQuiz'),
+        currentQuestion.id,
+        currentQuestion.questionText,
+        currentUser?.uid || 'guest',
+        currentUser?.alias || 'Invitado',
+        'good',
+        '',
+        activeQuiz.creatorUid || ''
+      );
+    } catch (err) {
+      console.error("Error submitting good question feedback:", err);
+    }
+  };
+
+  const handleRateBadClick = () => {
+    setFeedbackComment('');
+    setShowFeedbackModal(true);
+  };
+
+  const handleConfirmBadFeedback = async () => {
+    if (!feedbackComment.trim()) return;
+    setIsSubmittingFeedback(true);
+    try {
+      await submitQuestionFeedback(
+        activeQuiz.id,
+        activeQuiz.name || t('untitledQuiz'),
+        currentQuestion.id,
+        currentQuestion.questionText,
+        currentUser?.uid || 'guest',
+        currentUser?.alias || 'Invitado',
+        'bad',
+        feedbackComment.trim(),
+        activeQuiz.creatorUid || ''
+      );
+      setRatedStatus('bad');
+      setShowFeedbackModal(false);
+    } catch (err) {
+      console.error("Error submitting bad question feedback:", err);
+      alert("No se pudo enviar la valoración.");
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
+  };
 
   const handleTimeOut = () => {
     setIsSubmitted(true);
     setSelectedAnswer(null); // Indicates timeout
+    setSubmitFeedback('timeout');
+    if (soundEnabled) playIncorrectSound();
   };
 
   useEffect(() => {
@@ -55,7 +136,6 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
       }
     };
   }, []);
-
 
   useEffect(() => {
     if (isSubmitted || !isTimed) {
@@ -97,7 +177,7 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
             h = Math.imul(h ^ h >>> 13, 3266489909);
             return (h ^= h >>> 16) >>> 0;
         }
-    }
+    };
     const rng = seedrandom(currentQuestion.id);
     for (let i = originalOptions.length - 1; i > 0; i--) {
         const j = rng() % (i + 1);
@@ -111,17 +191,51 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
     const userAnswerIndex = userAnswers[currentQuestion.id];
     if (userAnswerIndex !== undefined) {
       const userAnswerText = currentQuestion.options[userAnswerIndex];
-      setSelectedAnswer(originalOptions.indexOf(userAnswerText));
+      const idx = originalOptions.indexOf(userAnswerText);
+      setSelectedAnswer(idx);
       setIsSubmitted(true);
+      setSubmitFeedback(idx === newShuffledCorrectIndex ? 'correct' : 'incorrect');
     } else {
       setSelectedAnswer(null);
       setIsSubmitted(false);
+      setSubmitFeedback(null);
     }
     
     setAnimate('animate-fade-in');
     const timer = setTimeout(() => setAnimate(''), 500);
     return () => clearTimeout(timer);
   }, [currentQuestion, userAnswers]);
+
+  // Automatic Speech Synthesis Readout
+  useEffect(() => {
+    let speechTimer: NodeJS.Timeout;
+    if (autoReadAloud && currentQuestion && !isSubmitted && shuffledOptions.length > 0) {
+      speechTimer = setTimeout(() => {
+        if (!('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
+        
+        const textToSpeak = `${decodeHtml(currentQuestion.questionText)}. ${shuffledOptions.map((opt, i) => `${t('option')} ${String.fromCharCode(65 + i)}. ${decodeHtml(opt)}`).join('. ')}`;
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utterance.lang = language;
+        utterance.onend = () => setIsSpeaking(false);
+        window.speechSynthesis.speak(utterance);
+        setIsSpeaking(true);
+      }, 250);
+    }
+    return () => {
+      if (speechTimer) clearTimeout(speechTimer);
+    };
+  }, [currentQuestionIndex, shuffledOptions, autoReadAloud, isSubmitted]);
+
+  // Cancel speech on submit
+  useEffect(() => {
+    if (isSubmitted) {
+      if (window.speechSynthesis && window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        setIsSpeaking(false);
+      }
+    }
+  }, [isSubmitted]);
   
   const handleAnswerSelect = (index: number) => {
     if (!isSubmitted) {
@@ -135,6 +249,16 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
       const originalOptionIndex = currentQuestion.options.indexOf(selectedOptionText);
       onUpdate({ userAnswers: { ...userAnswers, [currentQuestion.id]: originalOptionIndex } });
       setIsSubmitted(true);
+
+      // Trigger interactive feedback (Sound & Premium Animations)
+      const isCorrect = selectedAnswer === shuffledCorrectAnswerIndex;
+      if (isCorrect) {
+        setSubmitFeedback('correct');
+        if (soundEnabled) playCorrectSound();
+      } else {
+        setSubmitFeedback('incorrect');
+        if (soundEnabled) playIncorrectSound();
+      }
     }
   };
 
@@ -197,6 +321,7 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
 
   const goToNext = () => {
     if (currentQuestionIndex < questions.length - 1) {
+      setSubmitFeedback(null);
       onUpdate({ currentQuestionIndex: currentQuestionIndex + 1 });
     }
   };
@@ -206,21 +331,21 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
       return `border-gray-300 dark:border-gray-600 hover:bg-[rgba(var(--primary-50),1)] dark:hover:bg-gray-700 ${selectedAnswer === index ? 'ring-2 ring-[rgb(var(--primary-500))] border-[rgb(var(--primary-500))]' : ''}`;
     }
     if (index === shuffledCorrectAnswerIndex) {
-      return 'bg-green-100 dark:bg-green-900 border-green-500 text-green-800 dark:text-green-200';
+      return 'bg-green-100 dark:bg-green-900 border-green-500 text-green-800 dark:text-green-200 animate-green-glow';
     }
     if (index === selectedAnswer) {
-      return 'bg-red-100 dark:bg-red-900 border-red-500 text-red-800 dark:text-red-200';
+      return 'bg-red-100 dark:bg-red-900 border-red-500 text-red-800 dark:text-red-200 animate-red-glow';
     }
-    return 'border-gray-300 dark:border-gray-600';
+    return 'border-gray-300 dark:border-gray-600 opacity-60';
   };
 
   const finalUserAnswerForFeedback = selectedAnswer ?? (userAnswerForThisQuestion !== undefined ? shuffledOptions.indexOf(currentQuestion.options[userAnswerForThisQuestion]) : null);
 
   const getFeedbackClass = () => {
     if (!isSubmitted) return '';
-    if (finalUserAnswerForFeedback === shuffledCorrectAnswerIndex) return 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200';
-    if (finalUserAnswerForFeedback === null) return 'bg-yellow-100 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200';
-    return 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200';
+    if (finalUserAnswerForFeedback === shuffledCorrectAnswerIndex) return 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-200 animate-correct-pop border border-green-300 dark:border-green-800';
+    if (finalUserAnswerForFeedback === null) return 'bg-yellow-100 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 border border-yellow-300 dark:border-yellow-700';
+    return 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200 border border-red-300 dark:border-red-800';
   };
   
   if (!currentQuestion) return <div>Loading question...</div>;
@@ -229,9 +354,16 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
   const circumference = 2 * Math.PI * radius;
   const progress = (timeLeft / timeLimit) * circumference;
   
+  // Decide which transition animation class to use on the card
+  const getCardAnimationClass = () => {
+    if (submitFeedback === 'correct') return 'animate-correct-pop animate-green-glow';
+    if (submitFeedback === 'incorrect' || submitFeedback === 'timeout') return 'animate-incorrect-shake animate-red-glow';
+    return animate;
+  };
+
   return (
     <>
-      <div className={`max-w-3xl mx-auto bg-white dark:bg-gray-800 p-6 sm:p-8 rounded-xl shadow-lg ${animate}`}>
+      <div className={`max-w-3xl mx-auto bg-white dark:bg-gray-800 p-6 sm:p-8 rounded-xl shadow-lg transition-all duration-300 ${getCardAnimationClass()}`}>
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center space-x-4">
              {isTimed && <div className="relative h-12 w-12">
@@ -265,10 +397,56 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
         )}
 
         {isSubmitted && currentQuestion.justification && (
-          <div className="p-4 rounded-md bg-gray-100 dark:bg-gray-700 border-l-4 border-[rgb(var(--primary-500))] mb-6">
+          <div className="p-4 rounded-md bg-gray-100 dark:bg-gray-700 border-l-4 border-[rgb(var(--primary-500))] mb-6 animate-correct-pop">
               <h4 className="font-bold text-[rgb(var(--primary-800))] dark:text-[rgb(var(--primary-200))]">{t('justification')}</h4>
               <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{decodeHtml(currentQuestion.justification)}</p>
               <button onClick={openExplanationModal} className="mt-3 inline-flex items-center text-sm font-medium text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] hover:underline"><LightBulbIcon className="h-4 w-4 mr-1" />{t('explainBetter')}</button>
+          </div>
+        )}
+
+        {isSubmitted && (
+          <div className="mt-6 p-4 rounded-xl bg-gray-50 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-700/60 shadow-sm animate-fade-in flex flex-col sm:flex-row justify-between items-center gap-4 mb-6">
+            <div>
+              <p className="text-sm font-bold text-gray-700 dark:text-gray-300">
+                ¿Qué te pareció esta pregunta?
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Valora el contenido para ayudarnos a mejorar.
+              </p>
+            </div>
+            
+            {ratedStatus ? (
+              <span className={`text-xs font-bold px-3 py-1.5 rounded-full ${
+                ratedStatus === 'good'
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                  : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+              } animate-correct-pop`}>
+                {ratedStatus === 'good'
+                  ? '¡Gracias por tu valoración positiva! 💚'
+                  : '¡Comentarios enviados! Gracias por ayudarnos. 🧡'}
+              </span>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleRateGood}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/10 hover:bg-green-100 dark:hover:bg-green-900/20 active:scale-95 border border-green-200 dark:border-green-800/30 transition-all"
+                  title="Pregunta correcta o de buena calidad"
+                >
+                  <span className="text-base select-none">👍</span>
+                  <span>Bien</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRateBadClick}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 active:scale-95 border border-red-200 dark:border-red-800/30 transition-all"
+                  title="Pregunta incorrecta, con fallos o ambigua"
+                >
+                  <span className="text-base select-none">👎</span>
+                  <span>Mal / Reportar</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -293,7 +471,7 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
 
       {showExplanationModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setShowExplanationModal(false)}>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto flex flex-col animate-correct-pop" onClick={(e) => e.stopPropagation()}>
                 <div className="flex justify-between items-center mb-4 flex-shrink-0">
                     <h3 className="text-lg font-bold text-gray-900 dark:text-white">{t('explanation')}</h3>
                     <select
@@ -338,6 +516,57 @@ const QuizView: React.FC<QuizViewProps> = ({ activeQuiz, toggleFavorite, isFavor
                     </div>
                 </div>
             </div>
+        </div>
+      )}
+      {showFeedbackModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={() => setShowFeedbackModal(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-full max-w-md border border-gray-150 dark:border-gray-700/50 flex flex-col animate-correct-pop" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <span>🚨</span> Reportar Pregunta / Error
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-tight">
+              ¿Por qué consideras que esta pregunta está mal? Tu feedback le llegará directamente al creador del reto y al administrador para corregirla.
+            </p>
+            
+            <div className="mt-4">
+              <label htmlFor="feedback-comment" className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                Comentarios / Observación
+              </label>
+              <textarea
+                id="feedback-comment"
+                value={feedbackComment}
+                onChange={(e) => setFeedbackComment(e.target.value)}
+                rows={4}
+                className="w-full px-3 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] outline-none transition-all text-sm"
+                placeholder="Ej. La respuesta correcta no es la opción B, la explicación contradice la respuesta..."
+                disabled={isSubmittingFeedback}
+              />
+            </div>
+            
+            <div className="mt-6 flex justify-end space-x-2">
+              <button
+                onClick={() => setShowFeedbackModal(false)}
+                className="px-4 py-2 bg-gray-250 hover:bg-gray-350 text-gray-800 rounded-xl text-xs font-bold dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-all"
+                disabled={isSubmittingFeedback}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                onClick={handleConfirmBadFeedback}
+                disabled={!feedbackComment.trim() || isSubmittingFeedback}
+                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {isSubmittingFeedback ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span>Enviando...</span>
+                  </>
+                ) : (
+                  <span>Enviar Reporte</span>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

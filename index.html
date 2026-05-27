@@ -90,6 +90,56 @@
     --primary-900: 49 46 129;
     --primary-950: 30 27 75;
   }
+
+  /* Premium Correct Pop Animation (Springy scale-up bounce) */
+  @keyframes correct-pop {
+    0% { transform: scale(0.92); opacity: 0.8; }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .animate-correct-pop {
+    animation: correct-pop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  }
+
+  /* Premium Incorrect Shake Animation (Fluid side-to-side jitter) */
+  @keyframes incorrect-shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-8px); }
+    40%, 80% { transform: translateX(8px); }
+  }
+  .animate-incorrect-shake {
+    animation: incorrect-shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+  }
+
+  /* Pulsing shadow glows */
+  @keyframes green-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.3); }
+    50% { box-shadow: 0 0 16px 6px rgba(16, 185, 129, 0.5); }
+  }
+  .animate-green-glow {
+    animation: green-glow 1.5s infinite;
+  }
+
+  @keyframes red-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3); }
+    50% { box-shadow: 0 0 16px 6px rgba(239, 68, 68, 0.5); }
+  }
+  .animate-red-glow {
+    animation: red-glow 1.5s infinite;
+  }
+
+  /* Confetti Celebration Particle Fall & Twist */
+  @keyframes confetti-fall {
+    0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; }
+    100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
+  }
+  .confetti-piece {
+    position: fixed;
+    top: -5vh;
+    animation: confetti-fall 3.5s linear forwards;
+    z-index: 150;
+    pointer-events: none;
+  }
 </style>
 </head>
   <body class="bg-gray-100 dark:bg-gray-900">

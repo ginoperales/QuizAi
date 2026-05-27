@@ -23,7 +23,7 @@ import AdminDashboard from './components/AdminDashboard';
 import LandingView from './components/LandingView';
 import { StarIcon, BookOpenIcon, PlusCircleIcon, HistoryIcon, Cog6ToothIcon, ChartBarIcon } from './components/icons';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth, getUserProfile, logoutUser, saveQuizAttempt, getUserAttempts, uploadQuiz, addCompleterToQuiz, getUserNotifications, markNotificationAsRead, getQuizById, logActivity, toggleQuizFavorite, getQuizReports } from './services/firebaseService';
+import { auth, getUserProfile, logoutUser, saveQuizAttempt, getUserAttempts, uploadQuiz, addCompleterToQuiz, getUserNotifications, markNotificationAsRead, getQuizById, logActivity, toggleQuizFavorite, getQuizReports, updateActiveQuizProgress, updatePausedQuizzesInDb, createResumeNotification, updateResumeNotificationDetails, deleteNotificationFromDb } from './services/firebaseService';
 
 type SaveAction = 'complete' | 'exit';
 type QuizType = 'completed' | 'paused';
@@ -42,6 +42,7 @@ const App: React.FC = () => {
   const [showFarewellOverlay, setShowFarewellOverlay] = useState<string | null>(null);
   // Prevents onAuthStateChanged from navigating while manual login overlay is active
   const isManualLoginRef = useRef(false);
+  const isRestoringRef = useRef(true);
   // Mobile hamburger menu
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -77,7 +78,10 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
   
-  const [language, setLanguage] = useState<Language>('es');
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = localStorage.getItem('appLanguage');
+    return (saved === 'en' || saved === 'es') ? saved : 'es';
+  });
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [lastCompletedQuiz, setLastCompletedQuiz] = useState<CompletedQuiz | null>(null);
@@ -94,16 +98,22 @@ const App: React.FC = () => {
   
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(() => {
     const saved = localStorage.getItem('themeSettings');
-    const defaultSettings: ThemeSettings = { color: 'indigo', mode: 'dark' };
+    const defaultSettings: ThemeSettings = { color: 'indigo', mode: 'dark', autoReadAloud: false, soundEnabled: true };
     if (saved) {
         try {
-            return JSON.parse(saved);
+            const parsed = JSON.parse(saved);
+            return { ...defaultSettings, ...parsed };
         } catch (e) {
             return defaultSettings;
         }
     }
     return defaultSettings;
   });
+
+  // Save language to localStorage when changed
+  useEffect(() => {
+    localStorage.setItem('appLanguage', language);
+  }, [language]);
 
   const t = useCallback((key: keyof typeof LOCALIZED_STRINGS.en | ExplanationStyle, options?: Record<string, string | number>) => {
     let str = LOCALIZED_STRINGS[language][key as keyof typeof LOCALIZED_STRINGS.en] || LOCALIZED_STRINGS.en[key as keyof typeof LOCALIZED_STRINGS.en];
@@ -119,6 +129,13 @@ const App: React.FC = () => {
     const timer = setTimeout(() => setIsInitializing(false), 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  const combinedPausedHistory = useMemo(() => {
+    if (!activeQuiz) return pausedQuizzes;
+    // Prevent duplicate entries by ID
+    const filteredPaused = pausedQuizzes.filter(q => q.id !== activeQuiz.id);
+    return [activeQuiz, ...filteredPaused];
+  }, [activeQuiz, pausedQuizzes]);
 
   // Capture PWA install prompt
   useEffect(() => {
@@ -151,14 +168,9 @@ const App: React.FC = () => {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setIsLoadingAuth(true);
+      isRestoringRef.current = true;
       if (user) {
         try {
-          // Clear active quiz and paused quizzes from previous browser session/guest mode so new user starts fresh
-          setActiveQuiz(null);
-          setPausedQuizzes([]);
-          localStorage.removeItem('activeQuiz');
-          localStorage.removeItem('pausedQuizzes');
-
           let profile = await getUserProfile(user.uid);
           if (!profile) {
             // Auto-heal / fallback profile creation
@@ -177,6 +189,27 @@ const App: React.FC = () => {
             } catch (err) {
               console.error("Error creating fallback profile document:", err);
             }
+          }
+          
+          // Restore active quiz progress and paused quizzes from the database profile!
+          if (profile) {
+            if (profile.activeQuizProgress) {
+              setActiveQuiz(profile.activeQuizProgress);
+            } else {
+              setActiveQuiz(null);
+              localStorage.removeItem('activeQuiz');
+            }
+            if (profile.pausedQuizzes) {
+              setPausedQuizzes(profile.pausedQuizzes);
+            } else {
+              setPausedQuizzes([]);
+              localStorage.removeItem('pausedQuizzes');
+            }
+          } else {
+            setActiveQuiz(null);
+            setPausedQuizzes([]);
+            localStorage.removeItem('activeQuiz');
+            localStorage.removeItem('pausedQuizzes');
           }
           
           setCurrentUser(profile);
@@ -213,10 +246,19 @@ const App: React.FC = () => {
         setFavoriteQuizzes([]);
         setPendingReportsCount(0);
         setCurrentView('landing'); // Redirect to landing page on logout
-        const saved = localStorage.getItem('completedQuizzes');
-        setCompletedQuizzes(saved ? JSON.parse(saved) : []);
+        
+        // Safe logout cleanups
+        setActiveQuiz(null);
+        setPausedQuizzes([]);
+        setCompletedQuizzes([]);
+        localStorage.removeItem('activeQuiz');
+        localStorage.removeItem('pausedQuizzes');
+        localStorage.removeItem('completedQuizzes');
       }
       setIsLoadingAuth(false);
+      setTimeout(() => {
+        isRestoringRef.current = false;
+      }, 100);
     });
     return () => unsubscribe();
   }, []);
@@ -271,6 +313,8 @@ const App: React.FC = () => {
               userAnswers: {},
               writtenUserAnswers: quiz.mode === 'Written' ? {} : undefined,
               savedExplanations: {},
+              creatorUid: quiz.creatorUid,
+              creatorAlias: quiz.creatorAlias,
             };
             setActiveQuiz(newQuiz);
             setCurrentView('quiz');
@@ -328,26 +372,101 @@ const App: React.FC = () => {
     // Apply color theme
     const theme = THEMES[themeSettings.color];
     Object.entries(theme).forEach(([key, value]) => {
-      root.style.setProperty(`--primary-${key}`, value.join(' '));
+      root.style.setProperty(`--primary-${key}`, (value as number[]).join(' '));
     });
 
     // Save to local storage
     localStorage.setItem('themeSettings', JSON.stringify(themeSettings));
   }, [themeSettings]);
 
+  async function disableOlderResumeNotifications(quizId: string, currentNotifId?: string) {
+    if (!currentUser) return;
+    try {
+      const { collection, query, where, getDocs, doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('./services/firebaseService');
+      
+      const notificationsRef = collection(db, 'notifications');
+      const q = query(
+        notificationsRef,
+        where('recipientUid', '==', currentUser.uid),
+        where('quizId', '==', quizId),
+        where('type', '==', 'resume_progress'),
+        where('status', '==', 'unread')
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const updatePromises: Promise<void>[] = [];
+      const markedIds: string[] = [];
+
+      querySnapshot.forEach((docSnap) => {
+        if (docSnap.id !== currentNotifId) {
+          markedIds.push(docSnap.id);
+          updatePromises.push(updateDoc(doc(db, 'notifications', docSnap.id), { status: 'read' }));
+        }
+      });
+      
+      if (updatePromises.length > 0) {
+        await Promise.all(updatePromises);
+        setNotifications(prev => 
+          prev.map(n => 
+            markedIds.includes(n.id) ? { ...n, status: 'read' as const } : n
+          )
+        );
+      }
+    } catch (err) {
+      console.error("Error disabling older resume notifications in Firestore:", err);
+    }
+  }
+
   useEffect(() => {
     localStorage.setItem('quizFavorites', JSON.stringify(favorites));
   }, [favorites]);
 
   useEffect(() => {
-    if (!isInitializing) {
-      localStorage.setItem('activeQuiz', JSON.stringify(activeQuiz));
+    if (isInitializing || isLoadingAuth) return;
+    localStorage.setItem('activeQuiz', JSON.stringify(activeQuiz));
+
+    if (currentUser && !isRestoringRef.current) {
+      // Sync active progress to user document in Firestore
+      updateActiveQuizProgress(currentUser.uid, activeQuiz);
+
+      // Auto-create/update resume_progress notification
+      if (activeQuiz && !activeQuiz.notificationId) {
+        const createNotificationAsync = async () => {
+          try {
+            const initialDetails = `Pregunta ${activeQuiz.currentQuestionIndex + 1} de ${activeQuiz.questions.length}`;
+            const notifId = await createResumeNotification(
+              currentUser.uid,
+              'QuizAI',
+              activeQuiz.id,
+              activeQuiz.name || t('untitledQuiz'),
+              initialDetails
+            );
+            setActiveQuiz(prev => prev && prev.id === activeQuiz.id ? { ...prev, notificationId: notifId } : prev);
+            disableOlderResumeNotifications(activeQuiz.id, notifId);
+          } catch (err) {
+            console.error("Error auto-creating resume notification:", err);
+          }
+        };
+        createNotificationAsync();
+      }
+
+      if (activeQuiz && activeQuiz.notificationId) {
+        const currentDetails = `Pregunta ${activeQuiz.currentQuestionIndex + 1} de ${activeQuiz.questions.length}`;
+        updateResumeNotificationDetails(activeQuiz.notificationId, currentDetails);
+        disableOlderResumeNotifications(activeQuiz.id, activeQuiz.notificationId);
+      }
     }
-  }, [activeQuiz, isInitializing]);
+  }, [activeQuiz, isInitializing, currentUser, isLoadingAuth]);
   
   useEffect(() => {
     localStorage.setItem('pausedQuizzes', JSON.stringify(pausedQuizzes));
-  }, [pausedQuizzes]);
+    
+    // Sync pausedQuizzes to Firestore if logged in and authenticated profile is fully loaded
+    if (currentUser && !isInitializing && !isLoadingAuth && !isRestoringRef.current) {
+      updatePausedQuizzesInDb(currentUser.uid, pausedQuizzes);
+    }
+  }, [pausedQuizzes, currentUser, isInitializing, isLoadingAuth]);
 
   useEffect(() => {
     localStorage.setItem('completedQuizzes', JSON.stringify(completedQuizzes));
@@ -358,10 +477,14 @@ const App: React.FC = () => {
   };
   
   // FIX: Type selectedDifficulty as Difficulty for better type safety.
-  const handleQuizGenerated = (generatedQuestions: Question[], selectedDifficulty: Difficulty, timed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => {
+  const handleQuizGenerated = async (generatedQuestions: Question[], selectedDifficulty: Difficulty, timed: boolean, explanationStyle: ExplanationStyle, mode: QuizMode) => {
     if (activeQuiz && !window.confirm(t('areYouSureAbandon'))) {
       setIsLoading(false);
       return;
+    }
+
+    if (activeQuiz) {
+      await autoPauseActiveQuiz();
     }
 
     const shuffledQuestions = [...generatedQuestions];
@@ -381,6 +504,8 @@ const App: React.FC = () => {
         userAnswers: {},
         writtenUserAnswers: mode === 'Written' ? {} : undefined,
         savedExplanations: {},
+        creatorUid: currentUser?.uid,
+        creatorAlias: currentUser?.alias,
     };
 
     setActiveQuiz(newQuiz);
@@ -449,7 +574,14 @@ const App: React.FC = () => {
     }
 
     if (saveAction === 'exit') {
-        setPausedQuizzes(prev => [namedQuiz, ...prev]);
+        const updatedPaused = [namedQuiz, ...pausedQuizzes];
+        setPausedQuizzes(updatedPaused);
+        if (currentUser) {
+            updatePausedQuizzesInDb(currentUser.uid, updatedPaused);
+        }
+        if (activeQuiz) {
+            cleanupActiveQuizProgress(activeQuiz);
+        }
         setActiveQuiz(null);
         setCurrentView('generator');
     } else { // 'complete'
@@ -464,7 +596,7 @@ const App: React.FC = () => {
                 }
             });
         } else if (activeQuiz.mode === 'Written' && activeQuiz.writtenUserAnswers) {
-            const gradedAnswers = Object.values(activeQuiz.writtenUserAnswers).filter(a => a.score !== undefined);
+            const gradedAnswers = Object.values(activeQuiz.writtenUserAnswers).map(a => a as { text: string; score?: number; feedback?: string }).filter(a => a.score !== undefined);
             const totalScore = gradedAnswers.reduce((sum, a) => sum + (a.score || 0), 0);
             finalScore = totalScore;
             finalTotal = activeQuiz.questions.length * 100; // Max possible score
@@ -513,6 +645,9 @@ const App: React.FC = () => {
             setCompletedQuizzes(prev => [completed, ...prev]);
         }
         
+        if (activeQuiz) {
+            cleanupActiveQuizProgress(activeQuiz);
+        }
         setActiveQuiz(null);
         setLastCompletedQuiz(completed);
         setCurrentView('results');
@@ -524,7 +659,10 @@ const App: React.FC = () => {
     setShareQuizPublicly(false); // Reset checkbox
   };
 
-  const handleAbandonQuiz = () => {
+  const handleAbandonQuiz = async () => {
+    if (activeQuiz) {
+      await autoPauseActiveQuiz();
+    }
     setActiveQuiz(null);
   };
 
@@ -549,7 +687,15 @@ const App: React.FC = () => {
     if (type === 'completed') {
         setCompletedQuizzes(prev => prev.filter(item => item.id !== idToDelete));
     } else {
-        setPausedQuizzes(prev => prev.filter(item => item.id !== idToDelete));
+        if (activeQuiz && activeQuiz.id === idToDelete) {
+            cleanupActiveQuizProgress(activeQuiz);
+            setActiveQuiz(null);
+        }
+        const updatedPaused = pausedQuizzes.filter(item => item.id !== idToDelete);
+        setPausedQuizzes(updatedPaused);
+        if (currentUser) {
+            updatePausedQuizzesInDb(currentUser.uid, updatedPaused);
+        }
     }
   };
 
@@ -570,11 +716,25 @@ const App: React.FC = () => {
   };
   
   const handleResumeQuiz = (idToResume: string) => {
+    if (activeQuiz && activeQuiz.id === idToResume) {
+        setCurrentView('quiz');
+        disableOlderResumeNotifications(idToResume);
+        return;
+    }
+
     const quizToResume = pausedQuizzes.find(q => q.id === idToResume);
     if (quizToResume) {
-        setActiveQuiz(quizToResume);
-        setPausedQuizzes(prev => prev.filter(q => q.id !== idToResume));
+        const updatedPaused = pausedQuizzes.filter(q => q.id !== idToResume);
+        setPausedQuizzes(updatedPaused);
+        if (currentUser) {
+            updatePausedQuizzesInDb(currentUser.uid, updatedPaused);
+        }
+        
+        // Strip previous notificationId so a new active notification is created for this active session
+        const resumedQuiz = { ...quizToResume, notificationId: undefined };
+        setActiveQuiz(resumedQuiz);
         setCurrentView('quiz');
+        disableOlderResumeNotifications(idToResume);
     }
   };
 
@@ -592,9 +752,16 @@ const App: React.FC = () => {
             q.id === idToRename ? { ...q, name: trimmedName } : q
         ));
     } else {
-        setPausedQuizzes(prev => prev.map(q => 
+        if (activeQuiz && activeQuiz.id === idToRename) {
+            setActiveQuiz(prev => prev ? { ...prev, name: trimmedName } : null);
+        }
+        const updatedPaused = pausedQuizzes.map(q => 
             q.id === idToRename ? { ...q, name: trimmedName } : q
-        ));
+        );
+        setPausedQuizzes(updatedPaused);
+        if (currentUser) {
+            updatePausedQuizzesInDb(currentUser.uid, updatedPaused);
+        }
     }
   };
 
@@ -646,6 +813,9 @@ const App: React.FC = () => {
       // Get quiz
       const quiz = await getQuizById(notification.quizId);
       if (quiz) {
+        if (activeQuiz) {
+          await autoPauseActiveQuiz();
+        }
         const newQuiz: ActiveQuiz = {
           id: quiz.id,
           name: quiz.name,
@@ -658,6 +828,8 @@ const App: React.FC = () => {
           userAnswers: {},
           writtenUserAnswers: quiz.mode === 'Written' ? {} : undefined,
           savedExplanations: {},
+          creatorUid: quiz.creatorUid,
+          creatorAlias: quiz.creatorAlias,
         };
         setActiveQuiz(newQuiz);
         setCurrentView('quiz');
@@ -672,22 +844,118 @@ const App: React.FC = () => {
     }
   };
 
+  const cleanupActiveQuizProgress = async (quizToClean: ActiveQuiz) => {
+    if (!currentUser) return;
+    try {
+      await updateActiveQuizProgress(currentUser.uid, null);
+      if (quizToClean.notificationId) {
+        await deleteNotificationFromDb(quizToClean.notificationId);
+      }
+    } catch (err) {
+      console.error("Error cleaning up active quiz progress:", err);
+    }
+  };
+
+  const autoPauseActiveQuiz = async () => {
+    if (!activeQuiz) return;
+    try {
+      const filteredPaused = pausedQuizzes.filter(q => q.id !== activeQuiz.id);
+      const updatedPaused = [activeQuiz, ...filteredPaused];
+      setPausedQuizzes(updatedPaused);
+      if (currentUser) {
+        await updatePausedQuizzesInDb(currentUser.uid, updatedPaused);
+      }
+      await cleanupActiveQuizProgress(activeQuiz);
+    } catch (err) {
+      console.error("Error auto-pausing active quiz:", err);
+    }
+  };
+
+  const handleResumeUnsavedQuiz = async (notification: AppNotification) => {
+    setIsNotificationsOpen(false);
+    if (currentUser && currentUser.activeQuizProgress && currentUser.activeQuizProgress.id === notification.quizId) {
+      setActiveQuiz(currentUser.activeQuizProgress);
+      setCurrentView('quiz');
+      
+      await markNotificationAsRead(notification.id);
+      setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, status: 'read' } : n));
+      await disableOlderResumeNotifications(notification.quizId, notification.id);
+    } else {
+      try {
+        setIsLoading(true);
+        const profile = await getUserProfile(currentUser?.uid || '');
+        if (profile && profile.activeQuizProgress && profile.activeQuizProgress.id === notification.quizId) {
+          setActiveQuiz(profile.activeQuizProgress);
+          setCurrentView('quiz');
+          
+          await markNotificationAsRead(notification.id);
+          setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, status: 'read' } : n));
+          await disableOlderResumeNotifications(notification.quizId, notification.id);
+        } else {
+          const quiz = await getQuizById(notification.quizId);
+          if (quiz) {
+            const newQuiz: ActiveQuiz = {
+              id: quiz.id,
+              name: quiz.name,
+              questions: quiz.questions,
+              difficulty: quiz.difficulty,
+              isTimed: quiz.isTimed,
+              explanationStyle: quiz.explanationStyle,
+              currentQuestionIndex: 0,
+              mode: quiz.mode,
+              userAnswers: {},
+              writtenUserAnswers: quiz.mode === 'Written' ? {} : undefined,
+              savedExplanations: {},
+            };
+            setActiveQuiz(newQuiz);
+            setCurrentView('quiz');
+            await markNotificationAsRead(notification.id);
+            setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, status: 'read' } : n));
+            await disableOlderResumeNotifications(notification.quizId, notification.id);
+          } else {
+            alert("No se encontró el progreso de este reto ni el cuestionario original.");
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Error al reanudar el reto.");
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const handleDismissUnsavedQuiz = async (notification: AppNotification) => {
+    try {
+      await markNotificationAsRead(notification.id);
+      setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, status: 'read' } : n));
+      
+      if (currentUser) {
+        await updateActiveQuizProgress(currentUser.uid, null);
+        if (activeQuiz && activeQuiz.id === notification.quizId) {
+          setActiveQuiz(null);
+        }
+      }
+    } catch (err) {
+      console.error("Error dismissing unsaved progress:", err);
+    }
+  };
+
   const navItems = useMemo(() => {
     if (!currentUser) {
       return [
-        { view: 'landing', label: 'Inicio', icon: <PlusCircleIcon className="h-5 w-5" /> },
-        { view: 'publicQuizzes', label: 'Retos Públicos', icon: <BookOpenIcon className="h-5 w-5" /> },
+        { view: 'landing', label: t('navLanding'), icon: <PlusCircleIcon className="h-5 w-5" /> },
+        { view: 'publicQuizzes', label: t('navPublic'), icon: <BookOpenIcon className="h-5 w-5" /> },
       ];
     } else {
       return [
         { view: 'generator', label: activeQuiz ? t('continueQuiz') : t('startNewQuiz'), icon: <PlusCircleIcon className="h-5 w-5" /> },
-        { view: 'publicQuizzes', label: 'Retos Públicos', icon: <BookOpenIcon className="h-5 w-5" /> },
+        { view: 'publicQuizzes', label: t('navPublic'), icon: <BookOpenIcon className="h-5 w-5" /> },
         { view: 'favorites', label: `${t('favorites')} (${favorites.length})`, icon: <StarIcon className="h-5 w-5" /> },
         { view: 'history', label: t('history'), icon: <HistoryIcon className="h-5 w-5" /> },
-        { view: 'statistics', label: t('statistics'), icon: <ChartBarIcon className="h-5 w-5" /> },
       ];
     }
-  }, [currentUser, t, favorites.length, activeQuiz]);
+  }, [currentUser, activeQuiz, favorites.length, t]);
 
   const renderContent = () => {
     if (isLoading) {
@@ -723,20 +991,54 @@ const App: React.FC = () => {
                 setCurrentView('auth');
               }
             }} 
+            t={t}
           />
         );
       case 'auth':
         return (
           <AuthView 
             onAuthSuccess={(profile) => {
+              isRestoringRef.current = true;
               setCurrentUser(profile);
               setFavoriteQuizzes(profile.favoriteQuizzes || []);
               
-              // Clear active quiz and paused quizzes so new user starts fresh
-              setActiveQuiz(null);
-              setPausedQuizzes([]);
-              localStorage.removeItem('activeQuiz');
-              localStorage.removeItem('pausedQuizzes');
+              // Restore active progress and paused quizzes from the loaded profile!
+              if (profile.activeQuizProgress) {
+                setActiveQuiz(profile.activeQuizProgress);
+                localStorage.setItem('activeQuiz', JSON.stringify(profile.activeQuizProgress));
+              } else {
+                setActiveQuiz(null);
+                localStorage.removeItem('activeQuiz');
+              }
+
+              if (profile.pausedQuizzes) {
+                setPausedQuizzes(profile.pausedQuizzes);
+                localStorage.setItem('pausedQuizzes', JSON.stringify(profile.pausedQuizzes));
+              } else {
+                setPausedQuizzes([]);
+                localStorage.removeItem('pausedQuizzes');
+              }
+              
+              // Load completed quizzes (attempts) from database
+              getUserAttempts(profile.uid).then(dbAttempts => {
+                const mappedCompleted: CompletedQuiz[] = dbAttempts.map(att => ({
+                  id: att.id,
+                  name: att.quizName,
+                  questions: att.questions,
+                  difficulty: att.difficulty,
+                  isTimed: false,
+                  explanationStyle: ExplanationStyle.Didactica,
+                  mode: att.mode,
+                  userAnswers: att.userAnswers,
+                  writtenUserAnswers: att.writtenUserAnswers as any,
+                  score: att.score,
+                  totalQuestions: att.totalQuestions,
+                  date: att.date
+                }));
+                setCompletedQuizzes(mappedCompleted);
+              }).catch(err => {
+                console.error("Error loading attempts on login:", err);
+              });
               
               // Block onAuthStateChanged from navigating while overlay is showing
               isManualLoginRef.current = true;
@@ -745,6 +1047,7 @@ const App: React.FC = () => {
               setTimeout(() => {
                 setShowWelcomeOverlay(null);
                 isManualLoginRef.current = false;
+                isRestoringRef.current = false;
               }, 2500);
             }} 
             onGoBack={() => setCurrentView('landing')}
@@ -757,7 +1060,10 @@ const App: React.FC = () => {
             currentUser={currentUser}
             favoriteQuizzes={favoriteQuizzes}
             onToggleFavoriteQuiz={handleToggleQuizFavorite}
-            onStartQuiz={(quiz) => {
+            onStartQuiz={async (quiz) => {
+              if (activeQuiz) {
+                await autoPauseActiveQuiz();
+              }
               const newQuiz: ActiveQuiz = {
                 id: quiz.id,
                 name: quiz.name,
@@ -770,6 +1076,8 @@ const App: React.FC = () => {
                 userAnswers: {},
                 writtenUserAnswers: quiz.mode === 'Written' ? {} : undefined,
                 savedExplanations: {},
+                creatorUid: quiz.creatorUid,
+                creatorAlias: quiz.creatorAlias,
               };
               setActiveQuiz(newQuiz);
               setCurrentView('quiz');
@@ -793,6 +1101,9 @@ const App: React.FC = () => {
                     onSaveAndExit={handleSaveAndExit}
                     t={t}
                     language={language}
+                    autoReadAloud={themeSettings.autoReadAloud || false}
+                    soundEnabled={themeSettings.soundEnabled !== false}
+                    currentUser={currentUser}
                 />
             );
         }
@@ -806,17 +1117,20 @@ const App: React.FC = () => {
                 t={t} 
                 language={language} 
                 onSaveAndExit={handleSaveAndExit}
+                autoReadAloud={themeSettings.autoReadAloud || false}
+                soundEnabled={themeSettings.soundEnabled !== false}
+                currentUser={currentUser}
             />
         );
       case 'favorites':
         return <FavoritesView favorites={favorites} toggleFavorite={toggleFavorite} t={t} />;
       case 'results':
         if (!lastCompletedQuiz) return <WelcomeView currentUser={currentUser} onTriggerAuth={() => setCurrentView('auth')} onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} />;
-        return <ResultsView quiz={lastCompletedQuiz} onRestart={() => setCurrentView('generator')} onRetake={handleRetakeIncorrect} t={t} />;
+        return <ResultsView quiz={lastCompletedQuiz} onRestart={() => setCurrentView('generator')} onRetake={handleRetakeIncorrect} t={t} soundEnabled={themeSettings.soundEnabled !== false} />;
       case 'history':
         return <HistoryView 
                   completedHistory={completedQuizzes} 
-                  pausedHistory={pausedQuizzes}
+                  pausedHistory={combinedPausedHistory}
                   onDelete={handleDeleteQuiz} 
                   onViewDetails={handleViewDetails} 
                   onRetake={handleRetakeQuiz} 
@@ -836,7 +1150,7 @@ const App: React.FC = () => {
                 onStudy={handleStudyWithFlashcards}
                 t={t}
               />
-          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={pausedQuizzes} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
+          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
       case 'quizEditor':
           return editingQuiz ? (
               <QuizEditorView 
@@ -845,7 +1159,7 @@ const App: React.FC = () => {
                 onGoBack={() => { setEditingQuiz(null); setCurrentView('history'); }} 
                 t={t}
               />
-          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={pausedQuizzes} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
+          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
       case 'flashcards':
         return flashcardQuiz ? (
           <FlashcardsView
@@ -861,7 +1175,7 @@ const App: React.FC = () => {
             }}
             t={t}
           />
-        ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={pausedQuizzes} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
+        ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
       case 'statistics':
         return <StatisticsView completedQuizzes={completedQuizzes} t={t} />;
       case 'generator':
@@ -870,6 +1184,7 @@ const App: React.FC = () => {
             <LandingView 
               currentUser={currentUser} 
               onStart={() => setCurrentView('auth')}
+              t={t}
             />
           );
         }
@@ -901,11 +1216,12 @@ const App: React.FC = () => {
                 setCurrentView('auth');
               }
             }} 
+            t={t}
           />
         );
     }
   };
-  
+
   const handleNavClick = (view: View) => {
     if (view === 'generator' && activeQuiz) {
         setCurrentView('quiz');
@@ -939,7 +1255,7 @@ const App: React.FC = () => {
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                     </svg>
-                    {notifications.filter(n => n.status === 'unread').length > 0 && (
+                    {notifications.filter(n => n.status === 'unread' && !(activeQuiz && activeQuiz.id === n.quizId)).length > 0 && (
                       <span className="absolute top-0.5 right-0.5 block h-2 w-2 rounded-full bg-red-500 ring-1 ring-white dark:ring-gray-800" />
                     )}
                   </button>
@@ -947,21 +1263,38 @@ const App: React.FC = () => {
                     <div className="absolute right-0 mt-2 w-72 backdrop-blur-lg bg-white/95 dark:bg-gray-900/95 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-2xl z-50 py-3 overflow-hidden">
                       <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
                         <span className="font-bold text-sm">Notificaciones</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-bold">{notifications.filter(n => n.status === 'unread').length} nuevas</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-bold">{notifications.filter(n => n.status === 'unread' && !(activeQuiz && activeQuiz.id === n.quizId)).length} nuevas</span>
                       </div>
                       <div className="max-h-60 overflow-y-auto">
-                        {notifications.length === 0 ? (
+                        {notifications.filter(n => !(activeQuiz && activeQuiz.id === n.quizId)).length === 0 ? (
                           <p className="p-4 text-center text-xs text-gray-400">Sin notificaciones.</p>
-                        ) : notifications.map(n => {
-                          const isReport = n.type === 'quiz_report'; const isFeedback = n.type === 'question_feedback'; const isInvite = !n.type || n.type === 'invitation';
+                        ) : notifications.filter(n => !(activeQuiz && activeQuiz.id === n.quizId)).map(n => {
+                          const isReport = n.type === 'quiz_report';
+                          const isFeedback = n.type === 'question_feedback';
+                          const isResumeProgress = n.type === 'resume_progress';
+                          const isInvite = !n.type || n.type === 'invitation';
                           return (
                             <div key={n.id} className={`p-3 border-b border-gray-100 dark:border-gray-800 ${n.status === 'unread' ? 'bg-primary-50/30' : 'opacity-60'}`}>
-                              <p className="text-xs font-bold">{isReport ? '🚨 Reportado' : isFeedback ? '⚠️ Feedback' : `🚀 Reto de @${n.senderAlias}`}</p>
-                              <p className="text-[10px] text-gray-500 truncate">{n.quizName}</p>
+                              <p className="text-xs font-bold">{isReport ? '🚨 Reportado' : isFeedback ? '⚠️ Feedback' : isResumeProgress ? '⏱️ Reto Incompleto' : `🚀 Reto de @${n.senderAlias}`}</p>
+                              <p className="text-[10px] text-gray-500 truncate">{isResumeProgress ? `Progreso en: ${n.quizName}` : n.quizName}</p>
+                              {isResumeProgress && (
+                                <p className="text-[9px] text-gray-400 italic">
+                                  Dejado en: {n.detailsText || 'Pregunta 1'}
+                                </p>
+                              )}
                               <div className="flex gap-1 mt-1">
                                 {isInvite && <button onClick={() => handleAcceptInvite(n)} className="text-[10px] px-2 py-0.5 rounded bg-[rgb(var(--primary-600))] text-white font-bold">Aceptar</button>}
+                                {isResumeProgress && n.status === 'unread' && (
+                                  <>
+                                    <button onClick={() => handleResumeUnsavedQuiz(n)} className="text-[10px] px-2 py-0.5 rounded bg-[rgb(var(--primary-600))] text-white font-bold">Continuar</button>
+                                    <button onClick={() => handleDismissUnsavedQuiz(n)} className="text-[10px] px-2 py-0.5 rounded bg-gray-500 text-white font-bold">Descartar</button>
+                                  </>
+                                )}
+                                {isResumeProgress && n.status === 'read' && (
+                                  <span className="text-[9px] text-gray-400 dark:text-gray-500 font-semibold italic">Retomado o descartado</span>
+                                )}
                                 {isReport && <button onClick={() => { setCurrentView('adminDashboard'); setIsNotificationsOpen(false); handleMarkAsRead(n.id); }} className="text-[10px] px-2 py-0.5 rounded bg-red-600 text-white font-bold">Admin</button>}
-                                {n.status === 'unread' && <button onClick={() => handleMarkAsRead(n.id)} className="text-[10px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500">Leído</button>}
+                                {n.status === 'unread' && !isResumeProgress && <button onClick={() => handleMarkAsRead(n.id)} className="text-[10px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500">Leído</button>}
                               </div>
                             </div>
                           );
@@ -1002,7 +1335,7 @@ const App: React.FC = () => {
                     <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                     </svg>
-                    {notifications.filter(n => n.status === 'unread').length > 0 && (
+                    {notifications.filter(n => n.status === 'unread' && !(activeQuiz && activeQuiz.id === n.quizId)).length > 0 && (
                       <span className="absolute top-1 right-1 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-800 animate-pulse" />
                     )}
                   </button>
@@ -1013,26 +1346,27 @@ const App: React.FC = () => {
                       <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
                         <span className="font-bold text-sm text-gray-800 dark:text-white">Notificaciones</span>
                         <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-bold">
-                          {notifications.filter(n => n.status === 'unread').length} nuevas
+                          {notifications.filter(n => n.status === 'unread' && !(activeQuiz && activeQuiz.id === n.quizId)).length} nuevas
                         </span>
                       </div>
                       
                       <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-                        {notifications.length === 0 ? (
+                        {notifications.filter(n => !(activeQuiz && activeQuiz.id === n.quizId)).length === 0 ? (
                           <div className="p-6 text-center text-xs text-gray-500 dark:text-gray-400">
                             No tienes ninguna notificación.
                           </div>
                         ) : (
-                          notifications.map((n) => {
+                          notifications.filter(n => !(activeQuiz && activeQuiz.id === n.quizId)).map((n) => {
                             const isReport = n.type === 'quiz_report';
                             const isFeedback = n.type === 'question_feedback';
+                            const isResumeProgress = n.type === 'resume_progress';
                             const isInvite = !n.type || n.type === 'invitation';
                             
                             return (
                               <div key={n.id} className={`p-4 transition-colors border-b border-gray-100 dark:border-gray-800 ${n.status === 'unread' ? 'bg-[rgba(var(--primary-500),0.03)]' : 'opacity-70'}`}>
                                 <div className="flex gap-2 items-start">
                                   <span className="text-sm select-none">
-                                    {isReport ? '🚨' : isFeedback ? '⚠️' : '🚀'}
+                                    {isReport ? '🚨' : isFeedback ? '⚠️' : isResumeProgress ? '⏱️' : '🚀'}
                                   </span>
                                   <div className="flex-1 min-w-0">
                                     {isReport && (
@@ -1065,6 +1399,17 @@ const App: React.FC = () => {
                                         </p>
                                       </>
                                     )}
+                                    {isResumeProgress && (
+                                      <>
+                                        <p className="text-xs font-bold text-amber-600 dark:text-amber-400">Reto Incompleto</p>
+                                        <p className="text-xs text-gray-700 dark:text-gray-300 mt-0.5 leading-tight">
+                                          Dejaste el reto <span className="font-semibold text-gray-900 dark:text-white">'{n.quizName}'</span> a medias.
+                                        </p>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 italic bg-amber-500/5 dark:bg-amber-500/10 p-1.5 rounded-lg border border-amber-500/10 mt-1.5">
+                                          Último avance: {n.detailsText || 'Pregunta 1'}
+                                        </p>
+                                      </>
+                                    )}
                                     
                                     <p className="text-[9px] text-gray-400 dark:text-gray-500 mt-1.5">
                                       {new Date(n.createdAt).toLocaleDateString()} a las {new Date(n.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
@@ -1078,6 +1423,25 @@ const App: React.FC = () => {
                                         >
                                           Aceptar
                                         </button>
+                                      )}
+                                      {isResumeProgress && n.status === 'unread' && (
+                                        <>
+                                          <button
+                                            onClick={() => handleResumeUnsavedQuiz(n)}
+                                            className="flex-grow py-1 px-2.5 rounded-lg text-[10px] text-white font-bold bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] shadow transition-all active:scale-[0.98]"
+                                          >
+                                            Continuar
+                                          </button>
+                                          <button
+                                            onClick={() => handleDismissUnsavedQuiz(n)}
+                                            className="py-1 px-2.5 rounded-lg text-[10px] text-gray-600 dark:text-gray-300 font-semibold border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all active:scale-[0.98]"
+                                          >
+                                            Descartar
+                                          </button>
+                                        </>
+                                      )}
+                                      {isResumeProgress && n.status === 'read' && (
+                                        <span className="text-[9px] text-gray-400 dark:text-gray-500 font-semibold italic">Retomado o descartado</span>
                                       )}
                                       {isReport && (
                                         <button
@@ -1103,7 +1467,7 @@ const App: React.FC = () => {
                                           Ver Historial
                                         </button>
                                       )}
-                                      {n.status === 'unread' && (
+                                      {n.status === 'unread' && !isResumeProgress && (
                                         <button
                                           onClick={() => handleMarkAsRead(n.id)}
                                           className="py-1 px-2 rounded-lg text-[9px] font-semibold border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-750 transition-all"
@@ -1159,6 +1523,15 @@ const App: React.FC = () => {
                         await logoutUser();
                         setCurrentUser(null);
                         setFavoriteQuizzes([]);
+                        
+                        // Safe manual logout cleanups
+                        setActiveQuiz(null);
+                        setPausedQuizzes([]);
+                        setCompletedQuizzes([]);
+                        localStorage.removeItem('activeQuiz');
+                        localStorage.removeItem('pausedQuizzes');
+                        localStorage.removeItem('completedQuizzes');
+
                         setShowFarewellOverlay(null);
                         setCurrentView('landing');
                       }, 2000);
@@ -1373,17 +1746,17 @@ const App: React.FC = () => {
       <Modal
         isOpen={sharedQuizPreview !== null}
         onClose={() => setSharedQuizPreview(null)}
-        title="Reto Compartido Recibido"
+        title={t('educationalChallenge')}
       >
         {sharedQuizPreview && (
           <div className="space-y-6 mt-4">
             <div className="text-center py-2">
-              <span className="text-4xl">🏆</span>
+              <span className="text-4xl select-none">🏆</span>
               <h3 className="text-2xl font-extrabold text-gray-900 dark:text-white mt-3 leading-tight">
                 {sharedQuizPreview.name}
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Creado por: <span className="font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">{sharedQuizPreview.creatorAlias}</span>
+                {t('createdBy')}<span className="font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">{sharedQuizPreview.creatorAlias}</span>
               </p>
             </div>
 
@@ -1394,33 +1767,33 @@ const App: React.FC = () => {
                 sharedQuizPreview.difficulty === 'Medium' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300' :
                 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
               }`}>
-                {sharedQuizPreview.difficulty === 'Easy' ? 'Fácil' : sharedQuizPreview.difficulty === 'Medium' ? 'Medio' : 'Difícil'}
+                {t(sharedQuizPreview.difficulty)}
               </span>
               <span className="text-xs font-bold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-900/40 px-3 py-1 rounded-full border border-gray-200 dark:border-gray-800">
-                {sharedQuizPreview.mode === 'MultipleChoice' ? 'Opción Múltiple' : 'Escrito'}
+                {t(sharedQuizPreview.mode)}
               </span>
             </div>
 
             {/* Details panel */}
             <div className="grid grid-cols-2 gap-4 text-center bg-gray-50 dark:bg-gray-900/30 p-4 rounded-2xl border border-gray-100 dark:border-gray-800/50">
               <div>
-                <p className="text-xs text-gray-400 dark:text-gray-500 uppercase font-bold tracking-wider">Preguntas</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 uppercase font-bold tracking-wider">{t('questionsCount')}</p>
                 <p className="text-lg font-black text-gray-800 dark:text-gray-200 mt-0.5">{sharedQuizPreview.questions.length}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-400 dark:text-gray-500 uppercase font-bold tracking-wider">Límite de Tiempo</p>
-                <p className="text-lg font-black text-gray-800 dark:text-gray-200 mt-0.5">{sharedQuizPreview.isTimed ? 'Sí' : 'No'}</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 uppercase font-bold tracking-wider">{t('timeLimit')}</p>
+                <p className="text-lg font-black text-gray-800 dark:text-gray-200 mt-0.5">{sharedQuizPreview.isTimed ? t('yes') : t('no')}</p>
               </div>
             </div>
 
             {/* Completers section */}
             <div>
               <h4 className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 text-center md:text-left">
-                Retadores Exitosos ({sharedQuizPreview.completerAliases?.length || 0})
+                {t('successfulChallengers', { count: sharedQuizPreview.completerAliases?.length || 0 })}
               </h4>
               {!sharedQuizPreview.completerAliases || sharedQuizPreview.completerAliases.length === 0 ? (
                 <p className="text-xs italic text-gray-400 dark:text-gray-500 text-center md:text-left">
-                  ¡Nadie ha completado este reto todavía! Sé el primero en conquistarlo.
+                  {t('noChallengersYet')}
                 </p>
               ) : (
                 <div className="flex flex-wrap justify-center md:justify-start gap-1.5 max-h-24 overflow-y-auto">
@@ -1441,7 +1814,7 @@ const App: React.FC = () => {
                 onClick={() => setSharedQuizPreview(null)}
                 className="w-full sm:flex-1 py-3 px-4 rounded-xl text-xs font-bold text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all text-center"
               >
-                Cancelar
+                {t('cancel')}
               </button>
               
               <button
@@ -1459,27 +1832,30 @@ const App: React.FC = () => {
                       userAnswers: {},
                       writtenUserAnswers: sharedQuizPreview.mode === 'Written' ? {} : undefined,
                       savedExplanations: {},
+                      creatorUid: sharedQuizPreview.creatorUid,
+                      creatorAlias: sharedQuizPreview.creatorAlias,
                     };
                     setActiveQuiz(newQuiz);
                     setCurrentView('quiz');
                     setSharedQuizPreview(null);
                   } else {
-                    sessionStorage.setItem('pendingSharedQuizId', sharedQuizPreview.id);
-                    if (window.confirm("Debes iniciar sesión o registrarte para empezar este reto. ¿Quieres ir al login?")) {
-                      setCurrentView('auth');
+                    if (window.confirm(t('mustLoginToStart'))) {
+                      sessionStorage.setItem('pendingSharedQuizId', sharedQuizPreview.id);
                       setSharedQuizPreview(null);
+                      setCurrentView('auth');
                     }
                   }
                 }}
-                className="w-full sm:flex-1 py-3 px-4 rounded-xl text-xs text-white font-bold bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] shadow-md transition-all active:scale-[0.98] text-center"
+                className="w-full sm:flex-1 py-3 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] transition-all shadow-md text-center active:scale-[0.98]"
               >
-                Aceptar Reto
+                {t('acceptChallenge')}
               </button>
             </div>
           </div>
         )}
       </Modal>
 
+      {/* Settings Modal */}
       <SettingsView
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -1488,50 +1864,41 @@ const App: React.FC = () => {
         t={t}
       />
 
-      {/* Welcome Animation Overlay — appears ON TOP of the app after login */}
+      {/* Animated Welcome/Farewell Overlays */}
       {showWelcomeOverlay && (
-        <div className="fixed inset-0 bg-gray-950/95 backdrop-blur-sm flex flex-col items-center justify-center z-[200] animate-fade-in">
-          <div className="text-center space-y-6 max-w-sm px-6">
-            <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-[rgba(var(--primary-500),0.15)] text-[rgb(var(--primary-400))] shadow-inner border border-[rgba(var(--primary-500),0.2)] animate-bounce">
-              <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fade-in">
+          <div className="bg-white dark:bg-gray-800 border border-gray-250 dark:border-gray-700/50 p-8 rounded-3xl shadow-2xl max-w-sm w-full mx-4 text-center transform scale-100 transition-transform animate-scale-up animate-duration-300">
+            <div className="w-16 h-16 mx-auto bg-gradient-to-tr from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] rounded-2xl flex items-center justify-center shadow-lg animate-bounce">
+              <span className="text-3xl select-none">👋</span>
             </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                ¡Bienvenido, @{showWelcomeOverlay}!
-              </h2>
-              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
-                Preparando tu entorno educativo
-              </p>
-            </div>
-            <div className="flex justify-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-500))] animate-ping" />
-              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-400))] animate-ping" style={{ animationDelay: '0.2s' }} />
-              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-300))] animate-ping" style={{ animationDelay: '0.4s' }} />
+            <h3 className="text-2xl font-black text-gray-900 dark:text-white mt-6 leading-tight">
+              {t('welcomeUser', { name: showWelcomeOverlay })}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+              {t('preparingEnvironment')}
+            </p>
+            <div className="flex justify-center gap-1.5 mt-6">
+              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-600))] animate-ping" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-500))] animate-ping" style={{ animationDelay: '0.2s' }} />
+              <span className="w-2.5 h-2.5 rounded-full bg-[rgb(var(--primary-400))] animate-ping" style={{ animationDelay: '0.4s' }} />
             </div>
           </div>
         </div>
       )}
 
-      {/* Farewell Animation Overlay — appears ON TOP of the app during logout */}
       {showFarewellOverlay && (
-        <div className="fixed inset-0 bg-gray-950/95 backdrop-blur-sm flex flex-col items-center justify-center z-[200] animate-fade-in">
-          <div className="text-center space-y-6 max-w-sm px-6">
-            <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-red-500/10 text-red-400 shadow-inner border border-red-500/20 animate-pulse">
-              <svg className="h-10 w-10 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ animationDuration: '3s' }}>
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fade-in">
+          <div className="bg-white dark:bg-gray-800 border border-gray-250 dark:border-gray-700/50 p-8 rounded-3xl shadow-2xl max-w-sm w-full mx-4 text-center transform scale-100 transition-transform animate-scale-up animate-duration-300">
+            <div className="w-16 h-16 mx-auto bg-red-500/10 dark:bg-red-500/20 rounded-2xl flex items-center justify-center shadow-lg border border-red-500/20">
+              <span className="text-3xl select-none">👋</span>
             </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                ¡Hasta pronto, @{showFarewellOverlay}!
-              </h2>
-              <p className="text-xs text-gray-400 font-semibold uppercase tracking-wider">
-                Cerrando sesión de forma segura
-              </p>
-            </div>
-            <div className="flex justify-center gap-1.5">
+            <h3 className="text-2xl font-black text-gray-900 dark:text-white mt-6 leading-tight">
+              {t('farewellUser', { name: showFarewellOverlay })}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+              {t('loggingOutSafely')}
+            </p>
+            <div className="flex justify-center gap-1.5 mt-6">
               <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
               <span className="w-2.5 h-2.5 rounded-full bg-red-400 animate-ping" style={{ animationDelay: '0.2s' }} />
               <span className="w-2.5 h-2.5 rounded-full bg-red-300 animate-ping" style={{ animationDelay: '0.4s' }} />
