@@ -799,7 +799,6 @@ const App: React.FC = () => {
         }
         setEditingQuiz(updatedQuiz);
       }
-      alert("¡Cambios guardados en tu historial!");
     } catch (err) {
       console.error(err);
       alert("Error al guardar los cambios en el historial.");
