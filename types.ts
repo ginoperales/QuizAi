@@ -77,11 +77,17 @@ export type Language = "en" | "es";
 
 export type ThemeColor = 'indigo' | 'sky' | 'teal' | 'rose';
 
+export type AssistantAiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'deepseek-chat';
+
 export interface ThemeSettings {
     color: ThemeColor;
     mode: 'light' | 'dark';
     autoReadAloud?: boolean;
     soundEnabled?: boolean;
+    speechInputEnabled?: boolean;
+    voiceAssistantMode?: boolean;
+    voicePersona?: 'default' | 'devyn' | 'clotilde'; // Devyn = male, Clotilde = female
+    assistantAiModel?: AssistantAiModel;
 }
 
 export interface FirebaseUser {
@@ -94,6 +100,7 @@ export interface FirebaseUser {
   favoriteQuizzes?: string[]; // Array of public quiz IDs favorited by the user
   activeQuizProgress?: ActiveQuiz | null; // Current active/unsaved progress
   pausedQuizzes?: ActiveQuiz[]; // Paused/saved quizzes
+  themeSettings?: ThemeSettings;
 }
 
 export interface AppNotification {

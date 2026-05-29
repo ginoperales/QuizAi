@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Question, Difficulty, Language, ActiveQuiz, ExplanationStyle, FirebaseUser } from '../types';
-import { getDeeperExplanation } from '../services/geminiService';
+import React, { useState, useEffect, useRef } from 'react';
+import { Question, Difficulty, Language, ActiveQuiz, ExplanationStyle, FirebaseUser, AssistantAiModel } from '../types';
+import { getDeeperExplanation, interpretMultipleChoiceAnswerWithAi } from '../services/geminiService';
 import { decodeHtml } from '../services/fileService';
 import { submitQuestionFeedback } from '../services/firebaseService';
 import { StarIcon, FilledStarIcon, SpeakerWaveIcon, StopCircleIcon, LightBulbIcon, RefreshIcon } from './icons';
 import { playCorrectSound, playIncorrectSound } from '../services/soundService';
+import { speakWithVoicePersona } from '../services/voiceService';
 
 interface QuizViewProps {
   activeQuiz: ActiveQuiz;
@@ -17,6 +18,9 @@ interface QuizViewProps {
   language: Language;
   autoReadAloud: boolean;
   soundEnabled: boolean;
+  voiceAssistantMode: boolean;
+  voicePersona?: 'default' | 'devyn' | 'clotilde';
+  assistantAiModel: AssistantAiModel;
   currentUser: FirebaseUser | null;
 }
 
@@ -37,6 +41,9 @@ const QuizView: React.FC<QuizViewProps> = ({
   onSaveAndExit,
   autoReadAloud,
   soundEnabled,
+  voiceAssistantMode,
+  voicePersona = 'default',
+  assistantAiModel,
   currentUser
 }) => {
   const { questions, currentQuestionIndex, userAnswers, difficulty, isTimed, explanationStyle } = activeQuiz;
@@ -68,6 +75,17 @@ const QuizView: React.FC<QuizViewProps> = ({
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackComment, setFeedbackComment] = useState('');
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+
+  // Voice assistant state
+  const [assistantStatus, setAssistantStatus] = useState<'idle' | 'reading' | 'listening' | 'grading' | 'explaining'>('idle');
+  const [mcqRecognition, setMcqRecognition] = useState<any>(null);
+  const voiceAssistantModeRef = useRef(voiceAssistantMode);
+  const shuffledOptionsRef = useRef(shuffledOptions);
+  const shuffledCorrectAnswerIndexRef = useRef(shuffledCorrectAnswerIndex);
+
+  useEffect(() => { voiceAssistantModeRef.current = voiceAssistantMode; }, [voiceAssistantMode]);
+  useEffect(() => { shuffledOptionsRef.current = shuffledOptions; }, [shuffledOptions]);
+  useEffect(() => { shuffledCorrectAnswerIndexRef.current = shuffledCorrectAnswerIndex; }, [shuffledCorrectAnswerIndex]);
 
   useEffect(() => {
     setRatedStatus(null);
@@ -134,8 +152,148 @@ const QuizView: React.FC<QuizViewProps> = ({
       if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
         window.speechSynthesis.cancel();
       }
+      if (mcqRecognition) {
+        try { mcqRecognition.stop(); } catch (_) {}
+      }
     };
   }, []);
+
+  // Helper to speak text with a callback on finish  
+  const speakText = (text: string, onEndCallback?: () => void) => {
+    if (!('speechSynthesis' in window)) {
+      if (onEndCallback) onEndCallback();
+      return;
+    }
+    speakWithVoicePersona(text, language, voicePersona, {
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => {
+        setIsSpeaking(false);
+        if (onEndCallback) onEndCallback();
+      },
+      onError: () => {
+        setIsSpeaking(false);
+        if (onEndCallback) onEndCallback();
+      },
+    });
+  };
+
+  const parseSpokenOptionLetter = (rawTranscript: string): number | null => {
+    const normalized = rawTranscript
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[.,;:!?()]/g, ' ')
+      .trim();
+    const patterns: Array<[RegExp, number]> = [
+      [/^(?:a|opcion a|option a|letra a|letter a|respuesta a|answer a)$/, 0],
+      [/^(?:b|be|opcion b|option b|letra b|letter b|respuesta b|answer b)$/, 1],
+      [/^(?:c|ce|opcion c|option c|letra c|letter c|respuesta c|answer c)$/, 2],
+      [/^(?:d|de|opcion d|option d|letra d|letter d|respuesta d|answer d)$/, 3],
+    ];
+    for (const [pattern, index] of patterns) {
+      if (pattern.test(normalized)) return index;
+    }
+    return null;
+  };
+
+  // Start recognition for MCQ - listens for A/B/C/D and auto-submits
+  const startMcqListening = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    try {
+      const rec = new SpeechRecognition();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = language === 'en' ? 'en-US' : 'es-ES';
+      rec.onstart = () => setAssistantStatus('listening');
+      rec.onresult = async (event: any) => {
+        const transcript = event.results[0][0].transcript.trim();
+        let chosenIndex = parseSpokenOptionLetter(transcript);
+
+        if (chosenIndex === null) {
+          setAssistantStatus('grading');
+          try {
+            const aiMatch = await interpretMultipleChoiceAnswerWithAi(
+              currentQuestion.questionText,
+              shuffledOptionsRef.current,
+              transcript,
+              language,
+              assistantAiModel
+            );
+            if (aiMatch.optionIndex !== null && aiMatch.confidence >= 45) {
+              chosenIndex = aiMatch.optionIndex;
+            }
+          } catch (err) {
+            console.error('AI answer interpretation failed:', err);
+          }
+        }
+
+        if (chosenIndex !== null && chosenIndex < shuffledOptionsRef.current.length) {
+          setAssistantStatus('grading');
+          const chosen = chosenIndex;
+          const correct = shuffledCorrectAnswerIndexRef.current;
+          const opts = shuffledOptionsRef.current;
+          // Submit the answer
+          const selectedOptionText = opts[chosen];
+          const originalOptionIndex = currentQuestion.options.indexOf(selectedOptionText);
+          onUpdate({ userAnswers: { ...userAnswers, [currentQuestion.id]: originalOptionIndex } });
+          setSelectedAnswer(chosen);
+          setIsSubmitted(true);
+          const isCorrect = chosen === correct;
+          if (isCorrect) {
+            setSubmitFeedback('correct');
+            if (soundEnabled) playCorrectSound();
+          } else {
+            setSubmitFeedback('incorrect');
+            if (soundEnabled) playIncorrectSound();
+          }
+          // Speak feedback and advance
+          setTimeout(() => {
+            if (!voiceAssistantModeRef.current) return;
+            setAssistantStatus('explaining');
+            const correctText = decodeHtml(opts[correct]);
+            const feedbackMsg = language === 'en'
+              ? isCorrect
+                ? `Correct! The answer is ${correctText}.`
+                : `Incorrect. The correct answer was ${correctText}.`
+              : isCorrect
+                ? `¡Correcto! La respuesta es ${correctText}.`
+                : `Incorrecto. La respuesta correcta era ${correctText}.`;
+            speakText(feedbackMsg, () => {
+              setTimeout(() => {
+                if (!voiceAssistantModeRef.current) return;
+                setSubmitFeedback(null);
+                if (currentQuestionIndex < questions.length - 1) {
+                  onUpdate({ currentQuestionIndex: currentQuestionIndex + 1 });
+                } else {
+                  onComplete();
+                }
+              }, 1500);
+            });
+          }, 200);
+        } else {
+          // Couldn't parse, re-listen
+          setAssistantStatus('explaining');
+          const retryMessage = language === 'en'
+            ? 'I could not understand your answer. Please say the letter, or describe the option again.'
+            : 'No pude entender tu respuesta. Di la letra, o describe la opcion nuevamente.';
+          speakText(retryMessage, () => {
+            if (voiceAssistantModeRef.current) startMcqListening();
+            else setAssistantStatus('idle');
+          });
+        }
+      };
+      rec.onend = () => {
+        if (assistantStatus === 'listening') setAssistantStatus('idle');
+      };
+      rec.onerror = () => setAssistantStatus('idle');
+      rec.start();
+      setMcqRecognition(rec);
+    } catch (err) {
+      console.error('MCQ recognition error:', err);
+      setAssistantStatus('idle');
+    }
+  };
 
   useEffect(() => {
     if (isSubmitted || !isTimed) {
@@ -206,26 +364,41 @@ const QuizView: React.FC<QuizViewProps> = ({
     return () => clearTimeout(timer);
   }, [currentQuestion, userAnswers]);
 
-  // Automatic Speech Synthesis Readout
+  // Voice Assistant or Automatic Speech Synthesis Readout
   useEffect(() => {
     let speechTimer: NodeJS.Timeout;
-    if (autoReadAloud && currentQuestion && !isSubmitted && shuffledOptions.length > 0) {
-      speechTimer = setTimeout(() => {
-        if (!('speechSynthesis' in window)) return;
-        window.speechSynthesis.cancel();
-        
-        const textToSpeak = `${decodeHtml(currentQuestion.questionText)}. ${shuffledOptions.map((opt, i) => `${t('option')} ${String.fromCharCode(65 + i)}. ${decodeHtml(opt)}`).join('. ')}`;
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.lang = language;
-        utterance.onend = () => setIsSpeaking(false);
-        window.speechSynthesis.speak(utterance);
-        setIsSpeaking(true);
-      }, 250);
+    if (currentQuestion && !isSubmitted && shuffledOptions.length > 0) {
+      if (voiceAssistantMode) {
+        setAssistantStatus('idle');
+        speechTimer = setTimeout(() => {
+          setAssistantStatus('reading');
+          const qNum = currentQuestionIndex + 1;
+          const qText = decodeHtml(currentQuestion.questionText);
+          const optionsText = shuffledOptions.map((opt, i) => `${String.fromCharCode(65 + i)}. ${decodeHtml(opt)}`).join('. ');
+          const promptSpeech = language === 'en'
+            ? `Question ${qNum}. ${qText}. Options: ${optionsText}. Say the letter, or answer in your own words and I will match it with AI.`
+            : `Pregunta ${qNum}. ${qText}. Opciones: ${optionsText}. Di la letra, o responde con tus palabras y la IA elegira la opcion mas cercana.`;
+          speakText(promptSpeech, () => {
+            if (voiceAssistantModeRef.current) {
+              startMcqListening();
+            }
+          });
+        }, 500);
+      } else if (autoReadAloud) {
+        speechTimer = setTimeout(() => {
+          if (!('speechSynthesis' in window)) return;
+          const textToSpeak = `${decodeHtml(currentQuestion.questionText)}. ${shuffledOptions.map((opt, i) => `${t('option')} ${String.fromCharCode(65 + i)}. ${decodeHtml(opt)}`).join('. ')}`;
+          speakText(textToSpeak);
+        }, 250);
+      }
     }
     return () => {
       if (speechTimer) clearTimeout(speechTimer);
+      if (voiceAssistantMode && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     };
-  }, [currentQuestionIndex, shuffledOptions, autoReadAloud, isSubmitted]);
+  }, [currentQuestionIndex, shuffledOptions, voiceAssistantMode, autoReadAloud, isSubmitted]);
 
   // Cancel speech on submit
   useEffect(() => {
@@ -270,11 +443,7 @@ const QuizView: React.FC<QuizViewProps> = ({
       return;
     }
     const textToSpeak = `${decodeHtml(currentQuestion.questionText)}. ${shuffledOptions.map((opt, i) => `${t('option')} ${String.fromCharCode(65 + i)}. ${decodeHtml(opt)}`).join('. ')}`;
-    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utterance.lang = language;
-    utterance.onend = () => setIsSpeaking(false);
-    window.speechSynthesis.speak(utterance);
-    setIsSpeaking(true);
+    speakText(textToSpeak);
   };
 
   const fetchExplanation = async (styleToUse: ExplanationStyle) => {
@@ -282,7 +451,7 @@ const QuizView: React.FC<QuizViewProps> = ({
     setExplanation('');
     setIsExplanationSaved(false);
     try {
-        const deeperExplanation = await getDeeperExplanation(currentQuestion.questionText, shuffledOptions[shuffledCorrectAnswerIndex], currentQuestion.justification || '', language, styleToUse);
+        const deeperExplanation = await getDeeperExplanation(currentQuestion.questionText, shuffledOptions[shuffledCorrectAnswerIndex], currentQuestion.justification || '', language, styleToUse, assistantAiModel);
         setExplanation(deeperExplanation);
     } catch (error) {
         setExplanation(t('errorGettingExplanation'));
@@ -364,6 +533,54 @@ const QuizView: React.FC<QuizViewProps> = ({
   return (
     <>
       <div className={`max-w-3xl mx-auto bg-white dark:bg-gray-800 p-6 sm:p-8 rounded-xl shadow-lg transition-all duration-300 ${getCardAnimationClass()}`}>
+        {voiceAssistantMode && (
+          <div className={`mb-6 p-4 rounded-2xl border flex items-center justify-between transition-all duration-300 shadow-md backdrop-blur-md ${
+            assistantStatus === 'reading' ? 'bg-blue-50/80 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/40 text-blue-700 dark:text-blue-300' :
+            assistantStatus === 'listening' ? 'bg-red-50/80 border-red-200 dark:bg-red-950/20 dark:border-red-900/40 text-red-700 dark:text-red-300 animate-pulse' :
+            assistantStatus === 'grading' ? 'bg-amber-50/80 border-amber-200 dark:bg-amber-950/20 dark:border-amber-900/40 text-amber-700 dark:text-amber-300' :
+            assistantStatus === 'explaining' ? 'bg-purple-50/80 border-purple-200 dark:bg-purple-950/20 dark:border-purple-900/40 text-purple-700 dark:text-purple-300' :
+            'bg-gray-50/80 border-gray-200 dark:bg-gray-850/20 dark:border-gray-800/40 text-gray-700 dark:text-gray-300'
+          }`}>
+            <div className="flex items-center gap-3">
+              <span className="text-xl select-none">
+                {assistantStatus === 'reading' ? '🔊' :
+                 assistantStatus === 'listening' ? '🎙️' :
+                 assistantStatus === 'grading' ? '⚡' :
+                 assistantStatus === 'explaining' ? '💡' : '🤖'}
+              </span>
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest opacity-60">Modo Manos Libres</p>
+                <p className="text-sm font-bold mt-0.5">
+                  {assistantStatus === 'reading' ? t('assistantStatusReading') :
+                   assistantStatus === 'listening' ? (language === 'en' ? 'Listening... say A, B, C or D' : 'Escuchando... di A, B, C o D') :
+                   assistantStatus === 'grading' ? t('assistantStatusGrading') :
+                   assistantStatus === 'explaining' ? t('assistantStatusFeedback') :
+                   t('voiceAssistantMode')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              {assistantStatus === 'listening' ? (
+                <div className="flex items-center gap-0.5 h-6">
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-3" style={{ animationDelay: '0.1s', animationDuration: '0.6s' }} />
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-5" style={{ animationDelay: '0.3s', animationDuration: '0.5s' }} />
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-4" style={{ animationDelay: '0.2s', animationDuration: '0.7s' }} />
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-2" style={{ animationDelay: '0.4s', animationDuration: '0.4s' }} />
+                </div>
+              ) : assistantStatus === 'grading' ? (
+                <svg className="animate-spin h-5 w-5 text-amber-500" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              ) : (
+                <span className={`h-2.5 w-2.5 rounded-full ${
+                  assistantStatus === 'reading' ? 'bg-blue-500 animate-ping' :
+                  assistantStatus === 'explaining' ? 'bg-purple-500 animate-ping' : 'bg-gray-400'
+                }`} />
+              )}
+            </div>
+          </div>
+        )}
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center space-x-4">
              {isTimed && <div className="relative h-12 w-12">

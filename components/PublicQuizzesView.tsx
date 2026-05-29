@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { getPublicQuizzes, sendQuizInvitation, reportQuiz } from '../services/firebaseService';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { getPublicQuizzes, sendQuizInvitation, reportQuiz, searchUsersByQuery } from '../services/firebaseService';
 import { FirestoreQuiz, FirebaseUser } from '../types';
 import Modal from './Modal';
 
@@ -37,6 +37,8 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [userSuggestions, setUserSuggestions] = useState<FirebaseUser[]>([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
 
   // Reporting states
   const [reportingQuiz, setReportingQuiz] = useState<FirestoreQuiz | null>(null);
@@ -44,6 +46,10 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [reportSuccess, setReportSuccess] = useState<string | null>(null);
+
+  // Preview / Start Quiz states
+  const [previewQuiz, setPreviewQuiz] = useState<FirestoreQuiz | null>(null);
+  const [randomizeQuestions, setRandomizeQuestions] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -62,11 +68,33 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
     loadData();
   }, []);
 
+  // Debounced user search for invitation autocomplete
+  useEffect(() => {
+    if (!recipientId || recipientId.trim().length < 2) {
+      setUserSuggestions([]);
+      return;
+    }
+    setIsSearchingUsers(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchUsersByQuery(recipientId);
+        // Exclude sender from suggestions
+        setUserSuggestions(results.filter(u => u.uid !== currentUser?.uid));
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsSearchingUsers(false);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [recipientId, currentUser?.uid]);
+
   // Filtered and searched quizzes
   const filteredQuizzes = useMemo(() => {
     return quizzes.filter(quiz => {
       const matchesSearch = quiz.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            quiz.creatorAlias.toLowerCase().includes(searchQuery.toLowerCase());
+                            quiz.creatorAlias.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            quiz.id.toLowerCase().includes(searchQuery.toLowerCase());
       
       const matchesDifficulty = selectedDifficulty === 'All' || quiz.difficulty === selectedDifficulty;
       const matchesMode = selectedMode === 'All' || quiz.mode === selectedMode;
@@ -83,7 +111,25 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
       }
       return;
     }
-    onStartQuiz(quiz);
+    setPreviewQuiz(quiz);
+    setRandomizeQuestions(false);
+  };
+
+  const confirmStartQuiz = () => {
+    if (!previewQuiz) return;
+    
+    const quizToStart = { ...previewQuiz };
+    if (randomizeQuestions) {
+      const shuffled = [...quizToStart.questions];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      quizToStart.questions = shuffled;
+    }
+    
+    onStartQuiz(quizToStart);
+    setPreviewQuiz(null);
   };
 
   const shareLink = sharingQuiz ? `${window.location.origin}/?quizId=${sharingQuiz.id}` : '';
@@ -100,6 +146,7 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
     setIsSendingInvite(true);
     setInviteError(null);
     setInviteSuccess(null);
+    setUserSuggestions([]);
 
     try {
       await sendQuizInvitation(
@@ -326,9 +373,17 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
                   <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-1 line-clamp-2">
                     {quiz.name}
                   </h3>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                    Creado por: <span className="font-semibold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">{quiz.creatorAlias}</span>
-                  </p>
+                  <div className="flex flex-col mb-4">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Creado por: <span className="font-semibold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">{quiz.creatorAlias}</span>
+                    </p>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px] uppercase font-bold text-gray-400 dark:text-gray-500 tracking-wider">CÓDIGO:</span>
+                      <code className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 font-mono select-all">
+                        {quiz.id}
+                      </code>
+                    </div>
+                  </div>
 
                   <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400 mb-6 bg-gray-50 dark:bg-gray-900/20 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
                     <div>
@@ -456,10 +511,39 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
                       type="text"
                       required
                       value={recipientId}
-                      onChange={(e) => setRecipientId(e.target.value)}
+                      onChange={(e) => { setRecipientId(e.target.value); setInviteError(null); setInviteSuccess(null); }}
                       placeholder="Buscar por Alias o ID (ej: QZ-5432)"
                       className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] outline-none transition-all"
+                      autoComplete="off"
                     />
+                    {isSearchingUsers && (
+                      <div className="absolute right-3 top-3.5">
+                        <svg className="animate-spin h-4 w-4 text-[rgb(var(--primary-500))]" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                      </div>
+                    )}
+                    {userSuggestions.length > 0 && (
+                      <div className="absolute z-50 left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden">
+                        {userSuggestions.map(user => (
+                          <button
+                            key={user.uid}
+                            type="button"
+                            onClick={() => { setRecipientId(user.alias); setUserSuggestions([]); }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors border-b border-gray-100 dark:border-gray-800 last:border-0"
+                          >
+                            <div className="h-7 w-7 rounded-full bg-[rgba(var(--primary-500),0.15)] flex items-center justify-center text-xs font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] flex-shrink-0">
+                              {user.alias?.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900 dark:text-white">{user.alias}</p>
+                              <p className="text-xs text-gray-400 dark:text-gray-500">{user.readableId}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {inviteError && (
@@ -598,6 +682,65 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
               </button>
             </div>
           </form>
+        )}
+      </Modal>
+
+      {/* Preview / Start Quiz Modal */}
+      <Modal
+        isOpen={previewQuiz !== null}
+        onClose={() => setPreviewQuiz(null)}
+        title="Opciones del Reto"
+      >
+        {previewQuiz && (
+          <div className="space-y-6 mt-4">
+            <div className="p-4 rounded-2xl bg-blue-500/5 dark:bg-blue-500/10 border border-blue-500/15">
+              <h4 className="text-sm font-bold text-blue-700 dark:text-blue-400 mb-1">{previewQuiz.name}</h4>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">Creado por: @{previewQuiz.creatorAlias}</p>
+              <div className="flex gap-4 mt-3 text-xs">
+                <div>Preguntas: <span className="font-semibold text-gray-700 dark:text-gray-300">{previewQuiz.questions.length}</span></div>
+                <div>Modo: <span className="font-semibold text-gray-700 dark:text-gray-300">{previewQuiz.mode === 'Written' ? 'Escrito' : 'Opción Múltiple'}</span></div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <div className="relative flex items-center">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={randomizeQuestions}
+                    onChange={(e) => setRandomizeQuestions(e.target.checked)}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[rgba(var(--primary-500),0.3)] dark:peer-focus:ring-[rgba(var(--primary-500),0.3)] rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-[rgb(var(--primary-500))]"></div>
+                </div>
+                <div>
+                  <span className="text-sm font-bold text-gray-800 dark:text-white block">Preguntas al Azar</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block">Cambia el orden de las preguntas antes de comenzar.</span>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPreviewQuiz(null)}
+                className="px-4 py-2.5 bg-gray-200 text-gray-800 rounded-xl text-xs font-bold hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmStartQuiz}
+                className="px-5 py-2.5 bg-gradient-to-r from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] text-white rounded-xl text-xs font-bold hover:from-[rgb(var(--primary-700))] hover:to-[rgb(var(--primary-600))] transition-all flex items-center gap-1.5 shadow-md active:scale-[0.98]"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Comenzar Reto
+              </button>
+            </div>
+          </div>
         )}
       </Modal>
     </div>

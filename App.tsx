@@ -23,7 +23,7 @@ import AdminDashboard from './components/AdminDashboard';
 import LandingView from './components/LandingView';
 import { StarIcon, BookOpenIcon, PlusCircleIcon, HistoryIcon, Cog6ToothIcon, ChartBarIcon } from './components/icons';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth, getUserProfile, logoutUser, saveQuizAttempt, getUserAttempts, uploadQuiz, addCompleterToQuiz, getUserNotifications, markNotificationAsRead, getQuizById, logActivity, toggleQuizFavorite, getQuizReports, updateActiveQuizProgress, updatePausedQuizzesInDb, createResumeNotification, updateResumeNotificationDetails, deleteNotificationFromDb } from './services/firebaseService';
+import { auth, getUserProfile, logoutUser, saveQuizAttempt, getUserAttempts, uploadQuiz, addCompleterToQuiz, getUserNotifications, markNotificationAsRead, getQuizById, logActivity, toggleQuizFavorite, getQuizReports, updateActiveQuizProgress, updatePausedQuizzesInDb, createResumeNotification, updateResumeNotificationDetails, deleteNotificationFromDb, updateQuizAttemptQuestions } from './services/firebaseService';
 
 type SaveAction = 'complete' | 'exit';
 type QuizType = 'completed' | 'paused';
@@ -57,6 +57,7 @@ const App: React.FC = () => {
   
   // Shared quiz preview state
   const [sharedQuizPreview, setSharedQuizPreview] = useState<FirestoreQuiz | null>(null);
+  const [randomizeSharedQuiz, setRandomizeSharedQuiz] = useState(false);
   
   const [activeQuiz, setActiveQuiz] = useState<ActiveQuiz | null>(() => {
     const saved = localStorage.getItem('activeQuiz');
@@ -86,7 +87,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [lastCompletedQuiz, setLastCompletedQuiz] = useState<CompletedQuiz | null>(null);
   const [viewingQuiz, setViewingQuiz] = useState<CompletedQuiz | null>(null);
-  const [editingQuiz, setEditingQuiz] = useState<CompletedQuiz | null>(null);
+  const [editingQuiz, setEditingQuiz] = useState<CompletedQuiz | ActiveQuiz | null>(null);
   const [flashcardQuiz, setFlashcardQuiz] = useState<CompletedQuiz | ActiveQuiz | null>(null);
 
   // State for the save modal & sharing
@@ -708,7 +709,13 @@ const App: React.FC = () => {
   };
 
   const handleRetakeQuiz = (idToRetake: string) => {
-    const quizToEdit = completedQuizzes.find(q => q.id === idToRetake);
+    let quizToEdit: CompletedQuiz | ActiveQuiz | undefined = completedQuizzes.find(q => q.id === idToRetake);
+    if (!quizToEdit) {
+      quizToEdit = pausedQuizzes.find(q => q.id === idToRetake);
+    }
+    if (!quizToEdit && activeQuiz?.id === idToRetake) {
+      quizToEdit = activeQuiz;
+    }
     if (quizToEdit) {
         setEditingQuiz(quizToEdit);
         setCurrentView('quizEditor');
@@ -768,6 +775,61 @@ const App: React.FC = () => {
   const handleStudyWithFlashcards = (quizToStudy: CompletedQuiz | ActiveQuiz) => {
     setFlashcardQuiz(quizToStudy);
     setCurrentView('flashcards');
+  };
+
+  const handleSaveEditedQuizToHistory = async (questions: Question[]) => {
+    if (!editingQuiz || !currentUser) return;
+    try {
+      if ('score' in editingQuiz) { // it's a CompletedQuiz
+        await updateQuizAttemptQuestions(editingQuiz.id, questions);
+        const updatedQuiz = { ...editingQuiz, questions };
+        setCompletedQuizzes(prev => prev.map(q => q.id === editingQuiz.id ? updatedQuiz : q));
+        setEditingQuiz(updatedQuiz);
+      } else { // it's an ActiveQuiz
+        const updatedQuiz = { ...editingQuiz, questions };
+        if (activeQuiz && activeQuiz.id === editingQuiz.id) {
+            setActiveQuiz(updatedQuiz);
+            if (currentUser) {
+                await updateDoc(doc(db, "users", currentUser.uid), { activeQuizProgress: updatedQuiz });
+            }
+        } else {
+            const updatedPaused = pausedQuizzes.map(q => q.id === editingQuiz.id ? updatedQuiz : q);
+            setPausedQuizzes(updatedPaused);
+            await updatePausedQuizzesInDb(currentUser.uid, updatedPaused);
+        }
+        setEditingQuiz(updatedQuiz);
+      }
+      alert("¡Cambios guardados en tu historial!");
+    } catch (err) {
+      console.error(err);
+      alert("Error al guardar los cambios en el historial.");
+    }
+  };
+
+  const handleShareHistoricalQuiz = async (quiz: CompletedQuiz) => {
+    if (!currentUser) {
+      alert(t('mustLoginToStart'));
+      return;
+    }
+    try {
+      const quizObj: Omit<FirestoreQuiz, 'createdAt'> = {
+        id: quiz.id,
+        name: quiz.name,
+        difficulty: quiz.difficulty,
+        isTimed: quiz.isTimed,
+        explanationStyle: quiz.explanationStyle,
+        mode: quiz.mode,
+        questions: quiz.questions,
+        creatorUid: currentUser.uid,
+        creatorAlias: currentUser.alias,
+        isPublic: true
+      };
+      await uploadQuiz(quizObj);
+      alert("¡Cuestionario compartido exitosamente con la comunidad!");
+    } catch (err: any) {
+      console.error("Error uploading quiz:", err);
+      alert("Error al compartir el cuestionario: " + err.message);
+    }
   };
 
   const handleToggleQuizFavorite = async (quizId: string) => {
@@ -1148,6 +1210,7 @@ const App: React.FC = () => {
                 toggleFavorite={toggleFavorite}
                 isFavorite={isFavorite}
                 onStudy={handleStudyWithFlashcards}
+                onShare={handleShareHistoricalQuiz}
                 t={t}
               />
           ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
@@ -1156,6 +1219,7 @@ const App: React.FC = () => {
               <QuizEditorView 
                 quiz={editingQuiz} 
                 onStartQuiz={(questions) => handleStartEditedQuiz(questions, editingQuiz)} 
+                onSaveQuiz={handleSaveEditedQuizToHistory}
                 onGoBack={() => { setEditingQuiz(null); setCurrentView('history'); }} 
                 t={t}
               />
@@ -1745,7 +1809,11 @@ const App: React.FC = () => {
       {/* Shared Quiz Preview Modal */}
       <Modal
         isOpen={sharedQuizPreview !== null}
-        onClose={() => setSharedQuizPreview(null)}
+        onClose={() => {
+          setSharedQuizPreview(null);
+          setRandomizeSharedQuiz(false);
+          sessionStorage.removeItem('pendingSharedQuizId');
+        }}
         title={t('educationalChallenge')}
       >
         {sharedQuizPreview && (
@@ -1809,6 +1877,24 @@ const App: React.FC = () => {
               )}
             </div>
 
+            <div className="space-y-4 py-2 border-t border-gray-100 dark:border-gray-800">
+              <label className="flex items-center gap-3 cursor-pointer p-3 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                <div className="relative flex items-center">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={randomizeSharedQuiz}
+                    onChange={(e) => setRandomizeSharedQuiz(e.target.checked)}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-[rgba(var(--primary-500),0.3)] dark:peer-focus:ring-[rgba(var(--primary-500),0.3)] rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-[rgb(var(--primary-500))]"></div>
+                </div>
+                <div>
+                  <span className="text-sm font-bold text-gray-800 dark:text-white block">Preguntas al Azar</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 block">Cambia el orden de las preguntas antes de comenzar.</span>
+                </div>
+              </label>
+            </div>
+
             <div className="pt-2 flex flex-col sm:flex-row gap-2">
               <button
                 onClick={() => setSharedQuizPreview(null)}
@@ -1820,10 +1906,20 @@ const App: React.FC = () => {
               <button
                 onClick={() => {
                   if (currentUser) {
+                    let finalQuestions = sharedQuizPreview.questions;
+                    if (randomizeSharedQuiz) {
+                      const shuffled = [...finalQuestions];
+                      for (let i = shuffled.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                      }
+                      finalQuestions = shuffled;
+                    }
+
                     const newQuiz: ActiveQuiz = {
                       id: sharedQuizPreview.id,
                       name: sharedQuizPreview.name,
-                      questions: sharedQuizPreview.questions,
+                      questions: finalQuestions,
                       difficulty: sharedQuizPreview.difficulty,
                       isTimed: sharedQuizPreview.isTimed,
                       explanationStyle: sharedQuizPreview.explanationStyle,
@@ -1838,6 +1934,7 @@ const App: React.FC = () => {
                     setActiveQuiz(newQuiz);
                     setCurrentView('quiz');
                     setSharedQuizPreview(null);
+                    setRandomizeSharedQuiz(false);
                   } else {
                     if (window.confirm(t('mustLoginToStart'))) {
                       sessionStorage.setItem('pendingSharedQuizId', sharedQuizPreview.id);

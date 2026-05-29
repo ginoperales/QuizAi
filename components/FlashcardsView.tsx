@@ -1,17 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Question, CompletedQuiz, ActiveQuiz } from '../types';
+import { Question, CompletedQuiz, ActiveQuiz, Language } from '../types';
 import { decodeHtml } from '../services/fileService';
+import { SpeakerWaveIcon, StopCircleIcon } from './icons';
 
 interface FlashcardsViewProps {
   quiz: CompletedQuiz | ActiveQuiz;
   onGoBack: () => void;
   t: (key: any, options?: any) => string;
+  language?: Language;
+  autoReadAloud?: boolean;
 }
 
-const FlashcardsView: React.FC<FlashcardsViewProps> = ({ quiz, onGoBack, t }) => {
+const FlashcardsView: React.FC<FlashcardsViewProps> = ({ quiz, onGoBack, t, language = 'es', autoReadAloud = false }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [animationClass, setAnimationClass] = useState('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const questions = quiz.questions;
   const currentQuestion = questions[currentIndex];
@@ -21,7 +25,52 @@ const FlashcardsView: React.FC<FlashcardsViewProps> = ({ quiz, onGoBack, t }) =>
     setIsFlipped(false);
   }, [currentIndex]);
 
+  // Auto-read question text when card changes and autoReadAloud is on
+  useEffect(() => {
+    if (autoReadAloud && currentQuestion && !isFlipped) {
+      const timer = setTimeout(() => {
+        speakText(decodeHtml(currentQuestion.questionText));
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+  }, [currentIndex, autoReadAloud]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  const speakText = (text: string) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = language === 'en' ? 'en-US' : 'es-ES';
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    setIsSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleSpeak = () => {
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      return;
+    }
+    if (!isFlipped) {
+      speakText(decodeHtml(currentQuestion.questionText));
+    } else {
+      const answerText = decodeHtml(currentQuestion.options[currentQuestion.correctAnswerIndex]);
+      const justText = currentQuestion.justification ? ` ${decodeHtml(currentQuestion.justification)}` : '';
+      speakText(answerText + justText);
+    }
+  };
+
   const navigate = (direction: 'next' | 'prev') => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    setIsSpeaking(false);
     setAnimationClass('animate-fade-out-quick');
     setTimeout(() => {
         if (direction === 'next') {
@@ -34,6 +83,8 @@ const FlashcardsView: React.FC<FlashcardsViewProps> = ({ quiz, onGoBack, t }) =>
   };
   
   const handleFlip = () => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    setIsSpeaking(false);
     setIsFlipped(!isFlipped);
   };
 
@@ -68,8 +119,18 @@ const FlashcardsView: React.FC<FlashcardsViewProps> = ({ quiz, onGoBack, t }) =>
           {t('goBack')}
         </button>
         <h2 className="text-xl font-bold text-gray-800 dark:text-white">{t('flashcards')}</h2>
-        <div className="text-sm text-gray-500 dark:text-gray-400">
-            {t('cardOf', { current: currentIndex + 1, total: questions.length })}
+        <div className="flex items-center gap-3">
+          {/* TTS Speaker Button */}
+          <button
+            onClick={handleSpeak}
+            className={`p-2 rounded-full transition-all ${isSpeaking ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 animate-pulse' : 'text-gray-400 hover:text-[rgb(var(--primary-500))] hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+            title={isSpeaking ? t('stopReading') : t('readAloud')}
+          >
+            {isSpeaking ? <StopCircleIcon /> : <SpeakerWaveIcon />}
+          </button>
+          <div className="text-sm text-gray-500 dark:text-gray-400">
+              {t('cardOf', { current: currentIndex + 1, total: questions.length })}
+          </div>
         </div>
       </div>
 
@@ -79,6 +140,7 @@ const FlashcardsView: React.FC<FlashcardsViewProps> = ({ quiz, onGoBack, t }) =>
           <div className="card-face card-front bg-white dark:bg-gray-800 rounded-xl shadow-lg flex flex-col justify-center items-center p-6 text-center cursor-pointer">
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 uppercase">{t('question')}</p>
             <p className="text-2xl font-semibold text-gray-900 dark:text-white">{decodeHtml(currentQuestion.questionText)}</p>
+            <p className="mt-6 text-xs text-gray-400 dark:text-gray-500 italic">{language === 'en' ? 'Tap to reveal answer' : 'Toca para ver la respuesta'}</p>
           </div>
 
           {/* Back of card */}

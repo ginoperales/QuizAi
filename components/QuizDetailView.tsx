@@ -12,6 +12,7 @@ interface QuizDetailViewProps {
   toggleFavorite: (question: Question) => void;
   isFavorite: (questionId: string) => boolean;
   onStudy: (quiz: CompletedQuiz | ActiveQuiz) => void;
+  onShare: (quiz: CompletedQuiz) => void;
   t: (key: any) => string;
 }
 
@@ -23,6 +24,7 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({
   toggleFavorite, 
   isFavorite, 
   onStudy, 
+  onShare,
   t 
 }) => {
   // Disagreement evaluation states
@@ -109,6 +111,10 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({
             <button onClick={() => onRetake(quiz.id)} className="flex items-center space-x-2 px-4 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] transition-colors">
               <PencilSquareIcon className="h-5 w-5" />
               <span>{t('editAndRetake')}</span>
+            </button>
+            <button onClick={() => onShare(quiz)} className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 transition-colors">
+                <span className="text-lg">🌍</span>
+                <span>Compartir Cuestionario</span>
             </button>
             <button onClick={() => exportQuizReportToPdf(quiz, t)} className="flex items-center space-x-2 px-4 py-2 bg-teal-600 text-white rounded-md text-sm font-medium hover:bg-teal-700 transition-colors">
                 <DocumentChartBarIcon className="h-5 w-5" />

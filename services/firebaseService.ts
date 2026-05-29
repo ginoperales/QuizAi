@@ -14,7 +14,7 @@ import {
   getDoc, 
   getDocs, 
   collection, 
-  query, 
+  query as dbQuery, 
   where, 
   orderBy, 
   deleteDoc, 
@@ -22,7 +22,7 @@ import {
   limit, 
   addDoc 
 } from 'firebase/firestore';
-import { FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification, ActiveQuiz } from '../types';
+import { FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification, ActiveQuiz, ThemeSettings, Question } from '../types';
 
 const firebaseConfig = {
   projectId: "quizais",
@@ -85,7 +85,7 @@ export const registerUser = async (email: string, password: string, alias: strin
 
     // 2. Check if this is the very first user in the database
     const usersRef = collection(db, 'users');
-    const firstUserQuery = query(usersRef, limit(1));
+    const firstUserQuery = dbQuery(usersRef, limit(1));
     const querySnapshot = await getDocs(firstUserQuery);
     
     // If collection is empty, role is 'admin', otherwise 'student'
@@ -248,7 +248,7 @@ export const uploadQuiz = async (quiz: Omit<FirestoreQuiz, 'createdAt'>): Promis
 export const getPublicQuizzes = async (): Promise<FirestoreQuiz[]> => {
   try {
     const quizzesRef = collection(db, 'quizzes');
-    const q = query(quizzesRef, where('isPublic', '==', true));
+    const q = dbQuery(quizzesRef, where('isPublic', '==', true));
     const querySnapshot = await getDocs(q);
     const quizzes: FirestoreQuiz[] = [];
     querySnapshot.forEach((doc) => {
@@ -309,10 +309,29 @@ export const saveQuizAttempt = async (attempt: Omit<QuizAttempt, 'id'>): Promise
   }
 };
 
+export const updateQuizAttemptQuestions = async (attemptId: string, updatedQuestions: Question[]): Promise<void> => {
+  try {
+    const docRef = doc(db, 'attempts', attemptId);
+    const sanitizedQuestions = sanitizeForFirestore(updatedQuestions);
+    await updateDoc(docRef, { questions: sanitizedQuestions });
+    
+    // Log the update
+    await logActivity(
+      'QUIZ_ATTEMPT_EDITED',
+      `Usuario modificó las preguntas del intento con ID ${attemptId}`,
+      auth.currentUser?.uid || 'system',
+      'System'
+    );
+  } catch (error) {
+    console.error("Error updating quiz attempt questions:", error);
+    throw error;
+  }
+};
+
 export const getUserAttempts = async (uid: string): Promise<QuizAttempt[]> => {
   try {
     const attemptsRef = collection(db, 'attempts');
-    const q = query(attemptsRef, where('userUid', '==', uid));
+    const q = dbQuery(attemptsRef, where('userUid', '==', uid));
     const querySnapshot = await getDocs(q);
     const attempts: QuizAttempt[] = [];
     querySnapshot.forEach((doc) => {
@@ -328,7 +347,7 @@ export const getUserAttempts = async (uid: string): Promise<QuizAttempt[]> => {
 export const getQuizAttemptsByAllUsers = async (quizId: string): Promise<QuizAttempt[]> => {
   try {
     const attemptsRef = collection(db, 'attempts');
-    const q = query(attemptsRef, where('quizId', '==', quizId));
+    const q = dbQuery(attemptsRef, where('quizId', '==', quizId));
     const querySnapshot = await getDocs(q);
     const attempts: QuizAttempt[] = [];
     querySnapshot.forEach((doc) => {
@@ -387,9 +406,9 @@ export const sendQuizInvitation = async (
     // Check if searched by User ID (QZ-XXXX) or Alias
     let q;
     if (trimmedId.toUpperCase().startsWith('QZ-')) {
-      q = query(usersRef, where('readableId', '==', trimmedId.toUpperCase()));
+      q = dbQuery(usersRef, where('readableId', '==', trimmedId.toUpperCase()));
     } else {
-      q = query(usersRef, where('alias', '==', trimmedId));
+      q = dbQuery(usersRef, where('alias', '==', trimmedId));
     }
     
     const querySnapshot = await getDocs(q);
@@ -426,10 +445,39 @@ export const sendQuizInvitation = async (
   }
 };
 
+export const searchUsersByQuery = async (query: string): Promise<FirebaseUser[]> => {
+  if (!query || query.trim().length < 2) return [];
+  try {
+    const trimmed = query.trim();
+    const usersRef = collection(db, 'users');
+    let results: FirebaseUser[] = [];
+
+    if (trimmed.toUpperCase().startsWith('QZ-')) {
+      // Search by exact readable ID
+      const q = dbQuery(usersRef, where('readableId', '==', trimmed.toUpperCase()));
+      const snap = await getDocs(q);
+      snap.forEach(doc => results.push(doc.data() as FirebaseUser));
+    } else {
+      // Search by alias: get all users and filter client-side (Firestore doesn't support prefix search natively)
+      const snap = await getDocs(usersRef);
+      snap.forEach(doc => {
+        const user = doc.data() as FirebaseUser;
+        if (user.alias?.toLowerCase().includes(trimmed.toLowerCase())) {
+          results.push(user);
+        }
+      });
+    }
+    return results.slice(0, 8); // Limit to 8 suggestions
+  } catch (error) {
+    console.error('Error searching users:', error);
+    return [];
+  }
+};
+
 export const getUserNotifications = async (uid: string): Promise<AppNotification[]> => {
   try {
     const notificationsRef = collection(db, 'notifications');
-    const q = query(notificationsRef, where('recipientUid', '==', uid));
+    const q = dbQuery(notificationsRef, where('recipientUid', '==', uid));
     const querySnapshot = await getDocs(q);
     const notifications: AppNotification[] = [];
     querySnapshot.forEach((doc) => {
@@ -705,6 +753,15 @@ export const updatePausedQuizzesInDb = async (uid: string, pausedQuizzes: Active
   }
 };
 
+export const updateUserThemeSettings = async (uid: string, themeSettings: ThemeSettings): Promise<void> => {
+  try {
+    const userRef = doc(db, 'users', uid);
+    await updateDoc(userRef, { themeSettings: sanitizeForFirestore(themeSettings) });
+  } catch (err) {
+    console.error("Error updating theme settings in Firestore:", err);
+  }
+};
+
 export const createResumeNotification = async (
   uid: string,
   senderAlias: string,
@@ -775,5 +832,4 @@ export function sanitizeForFirestore<T>(obj: T): T {
   }
   return obj;
 }
-
 

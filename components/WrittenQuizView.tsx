@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { ActiveQuiz, Language, ExplanationStyle, Difficulty, FirebaseUser } from '../types';
+import { ActiveQuiz, Language, ExplanationStyle, Difficulty, FirebaseUser, AssistantAiModel } from '../types';
 import { getDeeperExplanation, gradeWrittenAnswer, calculateLocalSimilarity } from '../services/geminiService';
 import { decodeHtml } from '../services/fileService';
 import { submitQuestionFeedback } from '../services/firebaseService';
-import { LightBulbIcon, RefreshIcon, SpeakerWaveIcon, StopCircleIcon } from './icons';
+import { LightBulbIcon, RefreshIcon, SpeakerWaveIcon, StopCircleIcon, MicrophoneIcon } from './icons';
 import { playCorrectSound, playIncorrectSound } from '../services/soundService';
+import { speakWithVoicePersona } from '../services/voiceService';
 
 interface WrittenQuizViewProps {
   activeQuiz: ActiveQuiz;
@@ -15,6 +16,10 @@ interface WrittenQuizViewProps {
   language: Language;
   autoReadAloud: boolean;
   soundEnabled: boolean;
+  speechInputEnabled: boolean;
+  voiceAssistantMode: boolean;
+  voicePersona?: 'default' | 'devyn' | 'clotilde';
+  assistantAiModel: AssistantAiModel;
   currentUser: FirebaseUser | null;
 }
 
@@ -33,6 +38,10 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
   language,
   autoReadAloud,
   soundEnabled,
+  speechInputEnabled,
+  voiceAssistantMode,
+  voicePersona = 'default',
+  assistantAiModel,
   currentUser
 }) => {
   const { questions, currentQuestionIndex, writtenUserAnswers, explanationStyle, isTimed, difficulty } = activeQuiz;
@@ -64,6 +73,27 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackComment, setFeedbackComment] = useState('');
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+
+  // Voice response (dictation) state
+  const [isListening, setIsListening] = useState(false);
+  const [recognition, setRecognition] = useState<any>(null);
+  const [interimText, setInterimText] = useState('');
+  const recognitionRef = React.useRef<any>(null);
+
+  // Voice assistant state and refs
+  const [assistantStatus, setAssistantStatus] = useState<'idle' | 'reading' | 'listening' | 'grading' | 'explaining'>('idle');
+  const userTextRef = React.useRef(userText);
+  const voiceAssistantModeRef = React.useRef(voiceAssistantMode);
+  // CRITICAL: accumulates final recognized text synchronously (not via async setState)
+  const pendingFinalTextRef = React.useRef('');
+
+  useEffect(() => {
+    userTextRef.current = userText;
+  }, [userText]);
+
+  useEffect(() => {
+    voiceAssistantModeRef.current = voiceAssistantMode;
+  }, [voiceAssistantMode]);
 
   useEffect(() => {
     setRatedStatus(null);
@@ -130,6 +160,153 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
     };
   }, []);
 
+  const speakText = (text: string, onEndCallback?: () => void) => {
+    if (!('speechSynthesis' in window)) {
+      if (onEndCallback) onEndCallback();
+      return;
+    }
+    speakWithVoicePersona(text, language, voicePersona, {
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => {
+        setIsSpeaking(false);
+        if (onEndCallback) onEndCallback();
+      },
+      onError: (e) => {
+        console.error("Speech synthesis error:", e);
+        setIsSpeaking(false);
+        if (onEndCallback) onEndCallback();
+      },
+    });
+  };
+
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch (_) {}
+      }
+    };
+  }, []);
+
+  const startListeningSession = (initialText = userTextRef.current) => {
+    if (!speechInputEnabled) return;
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert(t('speechInputUnsupported'));
+      return;
+    }
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+    }
+
+    const rec = new SpeechRecognition();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = language === 'en' ? 'en-US' : 'es-ES';
+    pendingFinalTextRef.current = initialText;
+
+    let heardAnything = false;
+    let silenceTimer: number | undefined;
+    const finishAfterSilence = () => {
+      if (silenceTimer) window.clearTimeout(silenceTimer);
+      silenceTimer = window.setTimeout(() => {
+        try { rec.stop(); } catch (_) {}
+      }, voiceAssistantModeRef.current ? 2200 : 4500);
+    };
+
+    rec.onstart = () => {
+      setRecognition(rec);
+      recognitionRef.current = rec;
+      setIsListening(true);
+      setInterimText('');
+      if (voiceAssistantModeRef.current) setAssistantStatus('listening');
+      finishAfterSilence();
+    };
+
+    rec.onresult = (event: any) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += t;
+        } else {
+          interimTranscript += t;
+        }
+      }
+      if (finalTranscript.trim()) {
+        heardAnything = true;
+        const newText = pendingFinalTextRef.current + (pendingFinalTextRef.current ? ' ' : '') + finalTranscript.trim();
+        pendingFinalTextRef.current = newText;
+        userTextRef.current = newText;
+        setUserText(newText);
+        setInterimText('');
+      } else if (interimTranscript.trim()) {
+        heardAnything = true;
+        setInterimText(interimTranscript);
+      }
+      finishAfterSilence();
+    };
+
+    rec.onend = () => {
+      if (silenceTimer) window.clearTimeout(silenceTimer);
+      setIsListening(false);
+      setInterimText('');
+      recognitionRef.current = null;
+      setRecognition(null);
+      const capturedText = pendingFinalTextRef.current;
+      if (voiceAssistantModeRef.current && capturedText.trim().length > 0) {
+        setAssistantStatus('grading');
+        handleSubmitWithText(capturedText);
+      } else if (voiceAssistantModeRef.current) {
+        const retryMessage = language === 'en'
+          ? heardAnything ? 'I could not capture a complete answer. Please try again.' : 'I did not hear an answer. Please try again.'
+          : heardAnything ? 'No pude capturar una respuesta completa. Intenta nuevamente.' : 'No escuche una respuesta. Intenta nuevamente.';
+        setAssistantStatus('explaining');
+        speakText(retryMessage, () => {
+          if (voiceAssistantModeRef.current && !isSubmitted) startListeningSession('');
+          else setAssistantStatus('idle');
+        });
+      }
+    };
+
+    rec.onerror = (err: any) => {
+      console.error("Speech recognition error:", err);
+      if (silenceTimer) window.clearTimeout(silenceTimer);
+      setIsListening(false);
+      setInterimText('');
+      recognitionRef.current = null;
+      setRecognition(null);
+      if (voiceAssistantModeRef.current) {
+        setAssistantStatus('explaining');
+        const message = language === 'en'
+          ? 'The microphone could not capture audio. Check the browser permission and try again.'
+          : 'El microfono no pudo capturar audio. Revisa el permiso del navegador e intenta nuevamente.';
+        speakText(message, () => setAssistantStatus('idle'));
+      }
+    };
+
+    try {
+      rec.start();
+    } catch (err) {
+      console.error("Failed to start speech recognition:", err);
+      setIsListening(false);
+      setRecognition(null);
+      recognitionRef.current = null;
+    }
+  };
+
+  const toggleListening = () => {
+    if (!speechInputEnabled) return;
+
+    if (isListening) {
+      try { (recognitionRef.current || recognition)?.stop(); } catch (_) {}
+    } else {
+      startListeningSession(userTextRef.current);
+    }
+  };
+
   useEffect(() => {
     if (isSubmitted || !isTimed) {
       return;
@@ -155,6 +332,16 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
         setIsSpeaking(false);
     }
 
+    // Turn off speech recognition if active when changing questions
+    if (isListening && recognition) {
+      try {
+        recognition.stop();
+      } catch (err) {
+        console.error(err);
+      }
+      setIsListening(false);
+    }
+
     setAnimate('animate-fade-in');
     const timer = setTimeout(() => setAnimate(''), 500);
     
@@ -177,26 +364,40 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
     return () => clearTimeout(timer);
   }, [currentQuestion, activeQuiz.writtenUserAnswers]);
 
-  // Automatic Speech Synthesis Readout
+  // Voice Assistant and Auto Read Aloud coordinator
   useEffect(() => {
     let speechTimer: NodeJS.Timeout;
-    if (autoReadAloud && currentQuestion && !isSubmitted) {
-      speechTimer = setTimeout(() => {
-        if (!('speechSynthesis' in window)) return;
-        window.speechSynthesis.cancel();
-        
-        const textToSpeak = decodeHtml(currentQuestion.questionText);
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.lang = language;
-        utterance.onend = () => setIsSpeaking(false);
-        window.speechSynthesis.speak(utterance);
-        setIsSpeaking(true);
-      }, 250);
+    if (currentQuestion && !isSubmitted) {
+      if (voiceAssistantMode) {
+        speechTimer = setTimeout(() => {
+          setAssistantStatus('reading');
+          const qNum = currentQuestionIndex + 1;
+          const qText = decodeHtml(currentQuestion.questionText);
+          const promptSpeech = language === 'en'
+            ? `Question ${qNum}. ${qText}. Speak your answer now.`
+            : `Pregunta ${qNum}. ${qText}. Dicta tu respuesta ahora.`;
+
+          speakText(promptSpeech, () => {
+            if (voiceAssistantModeRef.current) {
+              startListeningSession('');
+            }
+          });
+        }, 500);
+      } else if (autoReadAloud) {
+        speechTimer = setTimeout(() => {
+          if (!('speechSynthesis' in window)) return;
+          const textToSpeak = decodeHtml(currentQuestion.questionText);
+          speakText(textToSpeak);
+        }, 250);
+      }
     }
     return () => {
       if (speechTimer) clearTimeout(speechTimer);
+      if (voiceAssistantMode && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     };
-  }, [currentQuestionIndex, autoReadAloud, isSubmitted]);
+  }, [currentQuestionIndex, voiceAssistantMode, autoReadAloud, isSubmitted, speechInputEnabled, language]);
 
   // Cancel speech on submit
   useEffect(() => {
@@ -205,8 +406,74 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
         window.speechSynthesis.cancel();
         setIsSpeaking(false);
       }
+      if (isListening) {
+        try { (recognitionRef.current || recognition)?.stop(); } catch (err) { console.error(err); }
+        setIsListening(false);
+      }
     }
   }, [isSubmitted]);
+
+  const speakFeedbackAndAdvance = (score: number, feedback: string) => {
+    setAssistantStatus('explaining');
+    const introText = language === 'en'
+      ? `Graded. Score ${score} out of 100. ${feedback}`
+      : `Calificado. Puntaje ${score} sobre 100. ${feedback}`;
+
+    speakText(introText, () => {
+      // Once speaking feedback finishes, wait 2.5 seconds and advance!
+      setTimeout(() => {
+        if (voiceAssistantModeRef.current) {
+          if (currentQuestionIndex < questions.length - 1) {
+            setSubmitFeedback(null);
+            onUpdate({ currentQuestionIndex: currentQuestionIndex + 1 });
+          } else {
+            onComplete();
+          }
+        }
+      }, 2500);
+    });
+  };
+
+  // Variant of handleSubmit that takes the text directly (avoids React async state race on voice submission)
+  const handleSubmitWithText = async (capturedText: string) => {
+    if (!capturedText.trim()) return;
+    setUserText(capturedText); // sync UI
+    setIsGrading(true);
+    const correctAnswerText = currentQuestion.options[currentQuestion.correctAnswerIndex];
+    const referenceTextForLocal = correctAnswerText + ' ' + (currentQuestion.justification || '');
+    try {
+      const result = await gradeWrittenAnswer(currentQuestion.questionText, correctAnswerText, capturedText, language, assistantAiModel);
+      const newAnswers = {
+        ...(activeQuiz.writtenUserAnswers || {}),
+        [currentQuestion.id]: { text: capturedText, score: result.score, feedback: result.feedback, isGraded: true, gradedBy: 'ai' as const }
+      };
+      onUpdate({ writtenUserAnswers: newAnswers });
+      setIsSubmitted(true);
+      const isCorrect = result.score >= 70;
+      if (isCorrect) { setSubmitFeedback('correct'); if (soundEnabled) playCorrectSound(); }
+      else { setSubmitFeedback('incorrect'); if (soundEnabled) playIncorrectSound(); }
+      if (voiceAssistantModeRef.current) speakFeedbackAndAdvance(result.score, result.feedback);
+    } catch (error) {
+      console.error('AI grading failed, falling back to local:', error);
+      const localScore = calculateLocalSimilarity(capturedText, referenceTextForLocal);
+      const explanationText = currentQuestion.justification || correctAnswerText;
+      const localFeedback = language === 'es'
+        ? `Calificación local. Tu respuesta se comparó con: "${explanationText}"`
+        : `Local grading. Your answer was compared with: "${explanationText}"`;
+      const newAnswers = {
+        ...(activeQuiz.writtenUserAnswers || {}),
+        [currentQuestion.id]: { text: capturedText, score: localScore, feedback: localFeedback, isGraded: true, gradedBy: 'local' as const }
+      };
+      onUpdate({ writtenUserAnswers: newAnswers });
+      setIsSubmitted(true);
+      const isCorrect = localScore >= 70;
+      if (isCorrect) { setSubmitFeedback('correct'); if (soundEnabled) playCorrectSound(); }
+      else { setSubmitFeedback('incorrect'); if (soundEnabled) playIncorrectSound(); }
+      if (voiceAssistantModeRef.current) speakFeedbackAndAdvance(localScore, localFeedback);
+    } finally {
+      setIsGrading(false);
+    }
+  };
 
   const handleSubmit = async (fromTimeout = false) => {
     if (!userText.trim() && !fromTimeout) return;
@@ -235,7 +502,7 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
     const referenceTextForLocal = correctAnswerText + " " + (currentQuestion.justification || "");
     
     try {
-        const result = await gradeWrittenAnswer(currentQuestion.questionText, correctAnswerText, userText, language);
+        const result = await gradeWrittenAnswer(currentQuestion.questionText, correctAnswerText, userText, language, assistantAiModel);
         const newAnswers = {
             ...(activeQuiz.writtenUserAnswers || {}),
             [currentQuestion.id]: {
@@ -257,6 +524,10 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
         } else {
           setSubmitFeedback('incorrect');
           if (soundEnabled) playIncorrectSound();
+        }
+
+        if (voiceAssistantModeRef.current) {
+          speakFeedbackAndAdvance(result.score, result.feedback);
         }
     } catch (error) {
         console.error("AI grading failed, falling back to local justification similarity algorithm:", error);
@@ -291,6 +562,10 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
           setSubmitFeedback('incorrect');
           if (soundEnabled) playIncorrectSound();
         }
+
+        if (voiceAssistantModeRef.current) {
+          speakFeedbackAndAdvance(localScore, localFeedback);
+        }
     } finally {
         setIsGrading(false);
     }
@@ -304,11 +579,7 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
       return;
     }
     const textToSpeak = decodeHtml(currentQuestion.questionText);
-    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utterance.lang = language;
-    utterance.onend = () => setIsSpeaking(false);
-    window.speechSynthesis.speak(utterance);
-    setIsSpeaking(true);
+    speakText(textToSpeak);
   };
 
   const fetchExplanation = async (styleToUse: ExplanationStyle) => {
@@ -317,7 +588,7 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
     setIsExplanationSaved(false);
     try {
         const correctAnswerText = currentQuestion.options[currentQuestion.correctAnswerIndex];
-        const deeperExplanation = await getDeeperExplanation(currentQuestion.questionText, correctAnswerText, '', language, styleToUse);
+        const deeperExplanation = await getDeeperExplanation(currentQuestion.questionText, correctAnswerText, '', language, styleToUse, assistantAiModel);
         setExplanation(deeperExplanation);
     } catch (error) {
         setExplanation(t('errorGettingExplanation'));
@@ -379,6 +650,55 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
   return (
     <>
       <div className={`max-w-3xl mx-auto bg-white dark:bg-gray-800 p-6 sm:p-8 rounded-xl shadow-lg transition-all duration-300 ${getCardAnimationClass()}`}>
+        {voiceAssistantMode && (
+          <div className={`mb-6 p-4 rounded-2xl border flex items-center justify-between transition-all duration-300 shadow-md backdrop-blur-md ${
+            assistantStatus === 'reading' ? 'bg-blue-50/80 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/40 text-blue-700 dark:text-blue-300' :
+            assistantStatus === 'listening' ? 'bg-red-50/80 border-red-200 dark:bg-red-950/20 dark:border-red-900/40 text-red-700 dark:text-red-300 animate-pulse' :
+            assistantStatus === 'grading' ? 'bg-amber-50/80 border-amber-200 dark:bg-amber-950/20 dark:border-amber-900/40 text-amber-700 dark:text-amber-300' :
+            assistantStatus === 'explaining' ? 'bg-purple-50/80 border-purple-200 dark:bg-purple-950/20 dark:border-purple-900/40 text-purple-700 dark:text-purple-300' :
+            'bg-gray-50/80 border-gray-200 dark:bg-gray-850/20 dark:border-gray-800/40 text-gray-700 dark:text-gray-300'
+          }`}>
+            <div className="flex items-center gap-3">
+              <span className="text-xl select-none">
+                {assistantStatus === 'reading' ? '🔊' :
+                 assistantStatus === 'listening' ? '🎙️' :
+                 assistantStatus === 'grading' ? '⚡' :
+                 assistantStatus === 'explaining' ? '💡' : '🤖'}
+              </span>
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest opacity-60">Modo Manos Libres</p>
+                <p className="text-sm font-bold mt-0.5">
+                  {assistantStatus === 'reading' ? t('assistantStatusReading') :
+                   assistantStatus === 'listening' ? t('assistantStatusListening') :
+                   assistantStatus === 'grading' ? t('assistantStatusGrading') :
+                   assistantStatus === 'explaining' ? t('assistantStatusFeedback') :
+                   t('voiceAssistantMode')}
+                </p>
+              </div>
+            </div>
+            {/* Equalizer or pulsating dot */}
+            <div className="flex items-center gap-1">
+              {assistantStatus === 'listening' ? (
+                <div className="flex items-center gap-0.5 h-6">
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-3" style={{ animationDelay: '0.1s', animationDuration: '0.6s' }} />
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-5" style={{ animationDelay: '0.3s', animationDuration: '0.5s' }} />
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-4" style={{ animationDelay: '0.2s', animationDuration: '0.7s' }} />
+                  <span className="w-1 bg-red-500 rounded-full animate-bounce h-2" style={{ animationDelay: '0.4s', animationDuration: '0.4s' }} />
+                </div>
+              ) : assistantStatus === 'grading' ? (
+                <svg className="animate-spin h-5 w-5 text-amber-500" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              ) : (
+                <span className={`h-2.5 w-2.5 rounded-full ${
+                  assistantStatus === 'reading' ? 'bg-blue-500 animate-ping' :
+                  assistantStatus === 'explaining' ? 'bg-purple-500 animate-ping' : 'bg-gray-400'
+                }`} />
+              )}
+            </div>
+          </div>
+        )}
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center space-x-4">
              {isTimed && <div className="relative h-12 w-12">
@@ -396,15 +716,41 @@ const WrittenQuizView: React.FC<WrittenQuizViewProps> = ({
         </div>
 
         <h2 className="text-xl sm:text-2xl font-semibold mb-6 text-gray-800 dark:text-white">{decodeHtml(currentQuestion.questionText)}</h2>
-        
-        <textarea
-          value={userText}
-          onChange={(e) => setUserText(e.target.value)}
-          disabled={isSubmitted || isGrading}
-          rows={5}
-          className="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-[rgb(var(--primary-500))] dark:bg-gray-700 dark:border-gray-600 dark:text-white disabled:bg-gray-100 dark:disabled:bg-gray-700/50"
-          placeholder={t('yourWrittenAnswer')}
-        />
+        <div className="relative">
+          <textarea
+            value={userText + (isListening && interimText ? (userText ? ' ' : '') + interimText : '')}
+            onChange={(e) => {
+              // When not listening, allow direct edit; strip any interim suffix
+              if (!isListening) setUserText(e.target.value);
+            }}
+            disabled={isSubmitted || isGrading}
+            rows={5}
+            className="w-full p-3 pr-12 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-[rgb(var(--primary-500))] dark:bg-gray-700 dark:border-gray-600 dark:text-white disabled:bg-gray-100 dark:disabled:bg-gray-700/50 resize-y"
+            placeholder={speechInputEnabled ? t('voiceAnswerPlaceholder') || 'Haz clic en el micrófono y comienza a hablar...' : t('yourWrittenAnswer')}
+          />
+          
+          {speechInputEnabled && !isSubmitted && !isGrading && (
+            <button
+              type="button"
+              onClick={toggleListening}
+              className={`absolute right-3 bottom-3 p-2.5 rounded-full shadow-md transition-all active:scale-95 z-10 ${
+                isListening
+                  ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse border border-red-400'
+                  : 'bg-[rgb(var(--primary-600))] hover:bg-[rgb(var(--primary-700))] text-white hover:shadow-lg'
+              }`}
+              title={isListening ? t('stopAudio') : t('speechInputEnabled')}
+            >
+              <MicrophoneIcon className="h-5 w-5" />
+            </button>
+          )}
+        </div>
+
+        {speechInputEnabled && isListening && (
+          <div className="mt-1.5 flex items-center gap-2 text-xs font-bold text-red-500 dark:text-red-400 animate-pulse pl-1 select-none">
+            <span className="h-2 w-2 rounded-full bg-red-500" />
+            <span>{t('speechInputMicActive')}</span>
+          </div>
+        )}
 
         {isGrading && (
           <div className="flex flex-col items-center justify-center h-40">

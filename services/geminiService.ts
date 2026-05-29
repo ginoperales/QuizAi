@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { Difficulty, Question, Language, ExplanationStyle } from '../types';
+import { Difficulty, Question, Language, ExplanationStyle, AssistantAiModel } from '../types';
 import { decodeHtml } from "./fileService";
 
 const API_KEY = process.env.API_KEY;
@@ -12,6 +12,9 @@ const ai = new GoogleGenAI({ apiKey: API_KEY! });
 
 // DEEPSEEK CONFIGURATION
 const DEEPSEEK_API_KEY = "sk-5b7819ca82d443ff8e464e325c8e5e58";
+const DEFAULT_ASSISTANT_MODEL: AssistantAiModel = 'gemini-2.5-flash';
+
+const isDeepSeekModel = (model: AssistantAiModel) => model === 'deepseek-chat';
 
 const responseSchema = {
   type: Type.ARRAY,
@@ -433,6 +436,101 @@ export const gradeWrittenAnswerWithDeepSeek = async (
   };
 };
 
+export const interpretMultipleChoiceAnswerWithAi = async (
+  question: string,
+  options: string[],
+  spokenAnswer: string,
+  language: Language,
+  model: AssistantAiModel = DEFAULT_ASSISTANT_MODEL
+): Promise<{ optionIndex: number | null; confidence: number; feedback: string }> => {
+  const languageMap = { en: 'English', es: 'Spanish' };
+  const optionsText = options
+    .map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`)
+    .join('\n');
+  const prompt = `
+    You are a hands-free quiz assistant. The user answered a multiple-choice question by voice.
+    Match the spoken answer to the closest option. If the answer is unclear, return null.
+    Respond in ${languageMap[language]} using only valid JSON with this shape:
+    {
+      "optionIndex": <0-based option index or null>,
+      "confidence": <number from 0 to 100>,
+      "feedback": "<brief confirmation or clarification>"
+    }
+
+    Question:
+    ${question}
+
+    Options:
+    ${optionsText}
+
+    Spoken answer:
+    ${spokenAnswer}
+  `;
+
+  if (isDeepSeekModel(model)) {
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+        temperature: 0
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`DeepSeek API error: ${response.status} - ${errText}`);
+    }
+
+    const data = await response.json();
+    const result = JSON.parse(data.choices[0].message.content.trim());
+    return {
+      optionIndex: typeof result.optionIndex === 'number' ? result.optionIndex : null,
+      confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+      feedback: typeof result.feedback === 'string' ? result.feedback : '',
+    };
+  }
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          optionIndex: {
+            type: Type.INTEGER,
+            nullable: true,
+            description: '0-based option index, or null if unclear.'
+          },
+          confidence: {
+            type: Type.INTEGER,
+            description: 'Confidence from 0 to 100.'
+          },
+          feedback: {
+            type: Type.STRING,
+            description: 'Brief confirmation or clarification.'
+          }
+        },
+        required: ['optionIndex', 'confidence', 'feedback']
+      }
+    },
+  });
+
+  const result = JSON.parse(response.text.trim());
+  return {
+    optionIndex: typeof result.optionIndex === 'number' ? result.optionIndex : null,
+    confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+    feedback: typeof result.feedback === 'string' ? result.feedback : '',
+  };
+};
+
 
 // ==========================================
 // 3. EXPORTED WRAPPERS WITH MULTI-TIER FALLBACKS
@@ -442,11 +540,21 @@ export const gradeWrittenAnswer = async (
     question: string,
     correctAnswer: string,
     userAnswer: string,
-    language: Language
+    language: Language,
+    model: AssistantAiModel = DEFAULT_ASSISTANT_MODEL
 ): Promise<{ score: number; feedback: string }> => {
-    // PRIORITY 1: Google Gemini API
+    if (isDeepSeekModel(model)) {
+        try {
+            console.log("Attempting answer grading with selected DeepSeek model...");
+            return await gradeWrittenAnswerWithDeepSeek(question, correctAnswer, userAnswer, language);
+        } catch (deepseekError) {
+            console.warn("Selected DeepSeek grading failed, falling back to Gemini:", deepseekError);
+        }
+    }
+
+    // PRIORITY 1: Selected Google Gemini API
     try {
-        console.log("Attempting answer grading with Gemini...");
+        console.log(`Attempting answer grading with ${model}...`);
         const languageMap = { en: 'English', es: 'Spanish' };
         const prompt = `
             You are an AI quiz grader. Evaluate the user's answer for the following question.
@@ -462,7 +570,7 @@ export const gradeWrittenAnswer = async (
         `;
 
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model,
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
@@ -664,11 +772,21 @@ export const getDeeperExplanation = async (
   answer: string,
   justification: string,
   language: Language,
-  style: ExplanationStyle
+  style: ExplanationStyle,
+  model: AssistantAiModel = DEFAULT_ASSISTANT_MODEL
 ): Promise<string> => {
-  // PRIORITY 1: Google Gemini API
+  if (isDeepSeekModel(model)) {
+    try {
+      console.log("Attempting deeper explanation with selected DeepSeek model...");
+      return await getDeeperExplanationWithDeepSeek(question, answer, justification, language, style);
+    } catch (deepseekError) {
+      console.warn("Selected DeepSeek explanation failed, falling back to Gemini:", deepseekError);
+    }
+  }
+
+  // PRIORITY 1: Selected Google Gemini API
   try {
-    console.log("Attempting deeper explanation with Gemini...");
+    console.log(`Attempting deeper explanation with ${model}...`);
     const languageMap = {
       en: 'English',
       es: 'Spanish',
@@ -689,7 +807,7 @@ export const getDeeperExplanation = async (
     `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model,
       contents: prompt,
     });
     return response.text;
