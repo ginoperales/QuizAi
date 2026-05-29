@@ -20,7 +20,8 @@ import {
   deleteDoc, 
   updateDoc, 
   limit, 
-  addDoc 
+  addDoc,
+  enableIndexedDbPersistence 
 } from 'firebase/firestore';
 import { FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification, ActiveQuiz, ThemeSettings, Question } from '../types';
 
@@ -38,6 +39,15 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Enable offline persistence
+enableIndexedDbPersistence(db).catch((err) => {
+  if (err.code === 'failed-precondition') {
+    console.warn("Firestore persistence failed: Multiple tabs open.");
+  } else if (err.code === 'unimplemented') {
+    console.warn("Firestore persistence failed: Browser not supported.");
+  }
+});
 
 // AUDIT LOGGER
 export const logActivity = async (

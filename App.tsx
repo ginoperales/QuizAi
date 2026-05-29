@@ -97,6 +97,21 @@ const App: React.FC = () => {
   const [saveAction, setSaveAction] = useState<SaveAction | null>(null);
   const [shareQuizPublicly, setShareQuizPublicly] = useState<boolean>(false);
   
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+  
   const [themeSettings, setThemeSettings] = useState<ThemeSettings>(() => {
     const saved = localStorage.getItem('themeSettings');
     const defaultSettings: ThemeSettings = { color: 'indigo', mode: 'dark', autoReadAloud: false, soundEnabled: true };
@@ -1151,7 +1166,7 @@ const App: React.FC = () => {
         return <AdminDashboard currentUser={currentUser} t={t} />;
       case 'quiz':
         if (!activeQuiz) {
-             return <WelcomeView currentUser={currentUser} onTriggerAuth={() => setCurrentView('auth')} onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} />;
+             return <WelcomeView currentUser={currentUser} onTriggerAuth={() => setCurrentView('auth')} onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} isOnline={isOnline} />;
         }
         if (activeQuiz.mode === 'Written') {
             return (
@@ -1186,7 +1201,7 @@ const App: React.FC = () => {
       case 'favorites':
         return <FavoritesView favorites={favorites} toggleFavorite={toggleFavorite} t={t} />;
       case 'results':
-        if (!lastCompletedQuiz) return <WelcomeView currentUser={currentUser} onTriggerAuth={() => setCurrentView('auth')} onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} />;
+        if (!lastCompletedQuiz) return <WelcomeView currentUser={currentUser} onTriggerAuth={() => setCurrentView('auth')} onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} isOnline={isOnline} />;
         return <ResultsView quiz={lastCompletedQuiz} onRestart={() => setCurrentView('generator')} onRetake={handleRetakeIncorrect} t={t} soundEnabled={themeSettings.soundEnabled !== false} />;
       case 'history':
         return <HistoryView 
@@ -1266,6 +1281,7 @@ const App: React.FC = () => {
             onGenerationFailed={handleGenerationFailed}
             setIsLoading={setIsLoading}
             t={t}
+            isOnline={isOnline}
           />
         );
       default:
@@ -1307,7 +1323,12 @@ const App: React.FC = () => {
           <div className="flex sm:hidden items-center justify-between h-14">
             <div className="flex items-center gap-2">
               <BookOpenIcon className="h-7 w-7 text-[rgb(var(--primary-500))]" />
-              <span className="text-base font-bold text-gray-800 dark:text-white">{APP_TITLE}</span>
+              <div className="flex flex-col">
+                <span className="text-base font-bold text-gray-800 dark:text-white leading-tight">{APP_TITLE}</span>
+                <span className={`text-[9px] font-bold tracking-wide select-none ${isOnline ? 'text-emerald-500 animate-pulse' : 'text-amber-500 animate-pulse'}`}>
+                  {isOnline ? '● En línea' : '● Sin conexión'}
+                </span>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               {currentUser && (
@@ -1381,6 +1402,20 @@ const App: React.FC = () => {
             <div className="flex items-center space-x-2">
               <BookOpenIcon className="h-8 w-8 text-[rgb(var(--primary-500))]" />
               <h1 className="text-xl md:text-2xl font-bold text-gray-800 dark:text-white">{APP_TITLE}</h1>
+              
+              {/* Premium Connection Badge */}
+              <div className={`ml-3 px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all select-none border ${
+                isOnline 
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200/50 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/30' 
+                  : 'bg-amber-50 text-amber-700 border-amber-200/50 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-900/30'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${
+                  isOnline 
+                    ? 'bg-emerald-500 animate-pulse' 
+                    : 'bg-amber-500 animate-pulse'
+                }`} />
+                <span>{isOnline ? 'En línea' : 'Sin conexión'}</span>
+              </div>
             </div>
             <div className="flex items-center space-x-4">
                <button onClick={handleToggleLanguage} className="text-sm font-medium text-gray-500 dark:text-gray-300 hover:text-[rgb(var(--primary-600))] dark:hover:text-[rgb(var(--primary-400))] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[rgba(var(--primary-500),1)] rounded-md p-1">

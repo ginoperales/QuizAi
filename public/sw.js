@@ -47,8 +47,6 @@ self.addEventListener('fetch', (event) => {
     request.method !== 'GET' ||
     url.hostname.includes('firebase') ||
     url.hostname.includes('googleapis') ||
-    url.hostname.includes('aistudiocdn') ||
-    url.hostname.includes('tailwindcss') ||
     url.pathname.startsWith('/api/')
   ) {
     return;

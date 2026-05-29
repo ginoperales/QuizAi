@@ -2,24 +2,17 @@ import { Language, ThemeSettings } from '../types';
 
 type VoicePersona = NonNullable<ThemeSettings['voicePersona']>;
 
-const getVoices = async (): Promise<SpeechSynthesisVoice[]> => {
-  const synth = window.speechSynthesis;
-  const voices = synth.getVoices();
-  if (voices.length > 0) return voices;
+// Global cache for voices to allow completely synchronous calls (fixing iOS/Tablet user activation bugs)
+let cachedVoices: SpeechSynthesisVoice[] = [];
 
-  return new Promise(resolve => {
-    const timer = window.setTimeout(() => {
-      synth.onvoiceschanged = null;
-      resolve(synth.getVoices());
-    }, 500);
-
-    synth.onvoiceschanged = () => {
-      window.clearTimeout(timer);
-      synth.onvoiceschanged = null;
-      resolve(synth.getVoices());
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  cachedVoices = window.speechSynthesis.getVoices();
+  if (window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      cachedVoices = window.speechSynthesis.getVoices();
     };
-  });
-};
+  }
+}
 
 const chooseVoice = (
   voices: SpeechSynthesisVoice[],
@@ -74,7 +67,11 @@ const applyPersona = (
   }
 };
 
-export const speakWithVoicePersona = async (
+/**
+ * Plays text using SpeechSynthesis.
+ * Note: Made completely synchronous to preserve user-interaction state on iPad, Safari, and other tablets.
+ */
+export const speakWithVoicePersona = (
   text: string,
   language: Language,
   persona: VoicePersona = 'default',
@@ -89,13 +86,31 @@ export const speakWithVoicePersona = async (
     return;
   }
 
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  const voices = await getVoices();
-  applyPersona(utterance, voices, language, persona);
+  try {
+    // Reset queue
+    window.speechSynthesis.cancel();
 
-  utterance.onend = () => callbacks.onEnd?.();
-  utterance.onerror = event => callbacks.onError?.(event);
-  callbacks.onStart?.();
-  window.speechSynthesis.speak(utterance);
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Retrieve voices synchronously from cache or system
+    const voices = cachedVoices.length > 0 ? cachedVoices : window.speechSynthesis.getVoices();
+    applyPersona(utterance, voices, language, persona);
+
+    utterance.onstart = () => callbacks.onStart?.();
+    utterance.onend = () => callbacks.onEnd?.();
+    utterance.onerror = event => {
+      console.warn("SpeechSynthesis error details:", event);
+      callbacks.onError?.(event);
+    };
+
+    // Bug fix for mobile/tablet engines getting stuck in paused state
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.error("Critical voice playback failed:", err);
+    callbacks.onEnd?.();
+  }
 };

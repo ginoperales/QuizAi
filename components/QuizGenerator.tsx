@@ -11,9 +11,10 @@ interface QuizGeneratorProps {
   onGenerationFailed: (error: string) => void;
   setIsLoading: (isLoading: boolean) => void;
   t: (key: any) => string;
+  isOnline?: boolean;
 }
 
-const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAuth, onQuizGenerated, onGenerationFailed, setIsLoading, t }) => {
+const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAuth, onQuizGenerated, onGenerationFailed, setIsLoading, t, isOnline }) => {
   const [difficulty, setDifficulty] = useState<Difficulty>(Difficulty.Medium);
   const [file, setFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string>('');
@@ -74,6 +75,44 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAut
     [Difficulty.Medium]: 20,
     [Difficulty.Hard]: 10,
   };
+
+  if (isOnline === false) {
+    return (
+      <div className="w-full max-w-2xl mx-auto bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-lg border border-amber-100 dark:border-amber-900/30 text-center relative overflow-hidden transition-all duration-300">
+        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-400 to-orange-500" />
+        
+        <div className="w-16 h-16 bg-amber-50 dark:bg-amber-950/20 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-5 shadow-inner">
+          <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M4 4l16 16M9 9l1.414 1.414M11.828 15H9v-2.828l8.586-8.586a2 2 0 112.828 2.828L11.828 15z" />
+          </svg>
+        </div>
+        
+        <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Modo sin conexión activo</h3>
+        <p className="text-gray-500 dark:text-gray-400 text-sm max-w-md mx-auto mb-6 leading-relaxed">
+          Actualmente estás desconectado de internet. La generación de nuevos cuestionarios con Inteligencia Artificial no está disponible en este momento.
+        </p>
+        
+        <div className="bg-gray-50 dark:bg-gray-850/50 p-4 rounded-xl text-left border border-gray-100 dark:border-gray-750 max-w-lg mx-auto mb-6">
+          <p className="text-xs font-semibold text-gray-750 dark:text-gray-300 uppercase tracking-wider mb-2 select-none">¿Qué puedes hacer offline?</p>
+          <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+            <li className="flex items-center gap-2">
+              <span className="text-emerald-500 font-bold select-none">✓</span> Jugar cuestionarios guardados en tu historial.
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="text-emerald-500 font-bold select-none">✓</span> Repasar tus preguntas favoritas.
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="text-emerald-500 font-bold select-none">✓</span> Estudiar tus cuestionarios con tarjetas de memoria.
+            </li>
+          </ul>
+        </div>
+        
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          La conexión se restablecerá automáticamente una vez recuperes tu señal.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-2xl mx-auto bg-white dark:bg-gray-800 p-8 rounded-xl shadow-lg">

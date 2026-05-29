@@ -11,6 +11,7 @@ interface WelcomeViewProps {
   onGenerationFailed: (error: string) => void;
   setIsLoading: (isLoading: boolean) => void;
   t: (key: any) => string;
+  isOnline?: boolean;
 }
 
 const FeatureCard: React.FC<{
