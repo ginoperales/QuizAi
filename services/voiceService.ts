@@ -74,7 +74,7 @@ const applyPersona = (
 export const speakWithVoicePersona = (
   text: string,
   language: Language,
-  persona: VoicePersona = 'default',
+  persona: ThemeSettings['voicePersona'] = 'default',
   callbacks: {
     onStart?: () => void;
     onEnd?: () => void;
@@ -94,7 +94,7 @@ export const speakWithVoicePersona = (
     
     // Retrieve voices synchronously from cache or system
     const voices = cachedVoices.length > 0 ? cachedVoices : window.speechSynthesis.getVoices();
-    applyPersona(utterance, voices, language, persona);
+    applyPersona(utterance, voices, language, persona ?? 'default');
 
     utterance.onstart = () => callbacks.onStart?.();
     utterance.onend = () => callbacks.onEnd?.();

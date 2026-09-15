@@ -8,11 +8,12 @@ interface ResultsViewProps {
   quiz: CompletedQuiz;
   onRestart: () => void;
   onRetake: () => void;
+  onRestartQuizClean?: () => void;
   t: (key: any) => string;
   soundEnabled: boolean;
 }
 
-const ResultsView: React.FC<ResultsViewProps> = ({ quiz, onRestart, onRetake, t, soundEnabled }) => {
+const ResultsView: React.FC<ResultsViewProps> = ({ quiz, onRestart, onRetake, onRestartQuizClean, t, soundEnabled }) => {
   const { score, totalQuestions, mode } = quiz;
   const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
   
@@ -71,23 +72,37 @@ const ResultsView: React.FC<ResultsViewProps> = ({ quiz, onRestart, onRetake, t,
             </div>
         </div>
         
-        {questionsToReviewCount > 0 && (
-            <button
-                onClick={onRetake}
-                className="w-full flex items-center justify-center py-3 px-4 mb-4 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
-            >
-                <RefreshIcon className="h-5 w-5 mr-2" />
-                {isWritten ? t('retakeIncorrect').replace('Incorrect Questions', 'Questions to Review') : t('retakeIncorrect')}
-            </button>
-        )}
+        <div className="space-y-3">
+          {questionsToReviewCount > 0 && (
+              <button
+                  type="button"
+                  onClick={onRetake}
+                  className="w-full flex items-center justify-center py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+              >
+                  <RefreshIcon className="h-5 w-5 mr-2" />
+                  {isWritten ? t('retakeIncorrect').replace('Incorrect Questions', 'Questions to Review') : t('retakeIncorrect')}
+              </button>
+          )}
 
-        <button
-          onClick={onRestart}
-          className="w-full flex items-center justify-center py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-[rgb(var(--primary-600))] hover:bg-[rgb(var(--primary-700))] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[rgba(var(--primary-500),1)] transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
-        >
-          <RefreshIcon className="h-5 w-5 mr-2" />
-          {t('restartQuiz')}
-        </button>
+          {onRestartQuizClean && (
+              <button
+                type="button"
+                onClick={onRestartQuizClean}
+                className="w-full flex items-center justify-center py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+              >
+                <RefreshIcon className="h-5 w-5 mr-2" />
+                {t('retakeQuiz')}
+              </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onRestart}
+            className="w-full flex items-center justify-center py-3 px-4 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-bold text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+          >
+            {t('restartQuiz')}
+          </button>
+        </div>
       </div>
     </>
   );

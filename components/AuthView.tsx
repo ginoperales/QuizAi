@@ -37,14 +37,18 @@ const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess, onGoBack, t }) => {
       let errorMsg = err.message || "Ocurrió un error inesperado.";
       
       // Translate common Firebase Auth errors
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+      if (['auth/wrong-password', 'auth/user-not-found', 'auth/invalid-credential', 'auth/invalid-login-credentials'].includes(err.code)) {
         errorMsg = "Correo o contraseña incorrectos.";
       } else if (err.code === 'auth/email-already-in-use') {
         errorMsg = "El correo electrónico ya está registrado.";
       } else if (err.code === 'auth/invalid-email') {
         errorMsg = "El formato de correo no es válido.";
       } else if (err.code === 'auth/weak-password') {
-        errorMsg = "La contraseña debe tener al menos 6 caracteres.";
+        errorMsg = "La contraseña debe tener al menos 8 caracteres.";
+      } else if (err.code === 'auth/too-many-requests') {
+        errorMsg = "Demasiados intentos. Espera unos minutos antes de reintentar.";
+      } else if (err.code === 'auth/network-request-failed') {
+        errorMsg = "No se pudo conectar. Revisa tu conexión a internet.";
       }
       
       setError(errorMsg);
@@ -86,6 +90,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess, onGoBack, t }) => {
                 value={alias}
                 onChange={(e) => setAlias(e.target.value)}
                 required={!isLogin}
+                maxLength={80}
                 className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] focus:border-transparent transition-all outline-none"
                 placeholder="Ej. QuizMaster99"
               />
@@ -97,7 +102,8 @@ const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess, onGoBack, t }) => {
               Correo Electrónico
             </label>
             <input
-              type="email"
+                type="email"
+                autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -111,10 +117,12 @@ const AuthView: React.FC<AuthViewProps> = ({ onAuthSuccess, onGoBack, t }) => {
               Contraseña
             </label>
             <input
-              type="password"
+                type="password"
+                autoComplete={isLogin ? 'current-password' : 'new-password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required
+                required
+                minLength={isLogin ? undefined : 8}
               className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] focus:border-transparent transition-all outline-none"
               placeholder="••••••••"
             />

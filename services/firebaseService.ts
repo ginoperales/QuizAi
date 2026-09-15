@@ -21,9 +21,13 @@ import {
   updateDoc, 
   limit, 
   addDoc,
+  arrayUnion,
   enableIndexedDbPersistence 
 } from 'firebase/firestore';
 import { FirebaseUser, FirestoreQuiz, QuizAttempt, AppNotification, ActiveQuiz, ThemeSettings, Question } from '../types';
+import { normalizeStoredQuestions } from './quizLogic';
+
+type UserDirectoryEntry = Pick<FirebaseUser, 'uid' | 'alias' | 'readableId'>;
 
 const firebaseConfig = {
   projectId: "quizais",
@@ -56,13 +60,20 @@ export const logActivity = async (
   userId?: string, 
   userAlias?: string
 ): Promise<void> => {
+  const authenticatedUser = auth.currentUser;
+  if (!authenticatedUser) return;
+
   try {
+    const profileSnapshot = await getDoc(doc(db, 'users', authenticatedUser.uid));
+    const authenticatedAlias = profileSnapshot.exists()
+      ? String(profileSnapshot.data().alias || 'Usuario').slice(0, 80)
+      : (authenticatedUser.email?.split('@')[0] || 'Usuario').slice(0, 80);
     const logsRef = collection(db, 'activity_logs');
     await addDoc(logsRef, {
-      userId: userId || 'guest',
-      userAlias: userAlias || 'Invitado',
-      action,
-      details,
+      userId: authenticatedUser.uid,
+      userAlias: authenticatedAlias,
+      action: action.slice(0, 80),
+      details: details.slice(0, 1_000),
       timestamp: new Date().toISOString()
     });
   } catch (err) {
@@ -73,13 +84,13 @@ export const logActivity = async (
 export const getActivityLogs = async (): Promise<any[]> => {
   try {
     const logsRef = collection(db, 'activity_logs');
-    const querySnapshot = await getDocs(logsRef);
+    const logsQuery = dbQuery(logsRef, orderBy('timestamp', 'desc'), limit(500));
+    const querySnapshot = await getDocs(logsQuery);
     const logs: any[] = [];
     querySnapshot.forEach((doc) => {
       logs.push({ id: doc.id, ...doc.data() });
     });
-    // Sort in memory: most recent first
-    return logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return logs;
   } catch (err) {
     console.error("Error fetching activity logs from Firestore:", err);
     return [];
@@ -89,37 +100,41 @@ export const getActivityLogs = async (): Promise<any[]> => {
 // AUTH FUNCTIONS
 export const registerUser = async (email: string, password: string, alias: string): Promise<FirebaseUser> => {
   try {
+    if (password.length < 8) throw new Error('La contraseña debe tener al menos 8 caracteres.');
+    if (!alias.trim()) throw new Error('El alias es obligatorio.');
     // 1. Create the user in Firebase Authentication
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
 
-    // 2. Check if this is the very first user in the database
-    const usersRef = collection(db, 'users');
-    const firstUserQuery = dbQuery(usersRef, limit(1));
-    const querySnapshot = await getDocs(firstUserQuery);
-    
-    // If collection is empty, role is 'admin', otherwise 'student'
-    const role = querySnapshot.empty ? 'admin' : 'student';
-
-    // Generate a short unique human-readable User ID
-    const readableId = `QZ-${Math.floor(1000 + Math.random() * 9000)}`;
+    // Roles are never assigned from the browser. Bootstrap administrators manually
+    // or from a trusted backend to avoid first-user races and privilege escalation.
+    const role = 'student' as const;
+    const readableId = `QZ-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
 
     const newUserProfile: FirebaseUser = {
       uid: user.uid,
-      email: email.toLowerCase(),
-      alias: alias.trim() || email.split('@')[0],
+      email: (user.email || email).toLowerCase(),
+      alias: (alias.trim() || email.split('@')[0]).slice(0, 80),
       readableId,
       role,
       createdAt: new Date().toISOString()
     };
 
-    // 3. Store user details in Firestore
     await setDoc(doc(db, 'users', user.uid), newUserProfile);
+    try {
+      await setDoc(doc(db, 'user_directory', user.uid), {
+        uid: user.uid,
+        alias: newUserProfile.alias,
+        readableId,
+      } satisfies UserDirectoryEntry);
+    } catch (directoryError) {
+      console.warn('No se pudo crear la entrada del directorio público.', directoryError);
+    }
     
     // Log registration activity
     await logActivity(
       'USER_REGISTER', 
-      `Nuevo usuario registrado: ${newUserProfile.alias} (${email.toLowerCase()}) con ID ${readableId} y rol ${role}`, 
+      `Nuevo usuario registrado: ${newUserProfile.alias} con ID ${readableId}`,
       user.uid, 
       newUserProfile.alias
     );
@@ -184,9 +199,18 @@ export const getUserProfile = async (uid: string): Promise<FirebaseUser | null> 
       const data = docSnap.data() as FirebaseUser;
       // Self-heal: generate a readableId if it does not exist for an older account
       if (!data.readableId) {
-        const readableId = `QZ-${Math.floor(1000 + Math.random() * 9000)}`;
+        const readableId = `QZ-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
         await updateDoc(docRef, { readableId });
         data.readableId = readableId;
+      }
+      try {
+        await setDoc(doc(db, 'user_directory', uid), {
+          uid: data.uid,
+          alias: data.alias,
+          readableId: data.readableId,
+        } satisfies UserDirectoryEntry, { merge: true });
+      } catch (directoryError) {
+        console.warn('No se pudo sincronizar el directorio público del usuario.', directoryError);
       }
       return data;
     }
@@ -197,9 +221,23 @@ export const getUserProfile = async (uid: string): Promise<FirebaseUser | null> 
   }
 };
 
+export const createStudentProfile = async (profile: FirebaseUser): Promise<void> => {
+  if (!auth.currentUser || auth.currentUser.uid !== profile.uid || profile.role !== 'student') {
+    throw new Error('No tienes permiso para crear este perfil.');
+  }
+  await setDoc(doc(db, 'users', profile.uid), profile);
+  await setDoc(doc(db, 'user_directory', profile.uid), {
+    uid: profile.uid,
+    alias: profile.alias,
+    readableId: profile.readableId,
+  } satisfies UserDirectoryEntry);
+};
+
 // ADMIN FUNCTIONALITIES
 export const getAllUsers = async (): Promise<FirebaseUser[]> => {
   try {
+    // The administration panel needs the complete private profiles. The
+    // user_directory collection is intentionally limited to invitation data.
     const usersRef = collection(db, 'users');
     const querySnapshot = await getDocs(usersRef);
     const users: FirebaseUser[] = [];
@@ -234,13 +272,22 @@ export const updateUserRole = async (uid: string, role: 'admin' | 'student'): Pr
 // QUIZ FUNCTIONS
 export const uploadQuiz = async (quiz: Omit<FirestoreQuiz, 'createdAt'>): Promise<void> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== quiz.creatorUid) {
+      throw new Error('No tienes permiso para publicar este cuestionario.');
+    }
+    const quizRef = doc(db, 'quizzes', quiz.id);
+    const existingQuiz = await getDoc(quizRef);
     const quizDoc: FirestoreQuiz = {
       ...quiz,
-      completerAliases: quiz.completerAliases || [],
-      createdAt: new Date().toISOString()
+      completerAliases: quiz.completerAliases
+        || (existingQuiz.exists() ? (existingQuiz.data() as FirestoreQuiz).completerAliases : [])
+        || [],
+      createdAt: existingQuiz.exists()
+        ? (existingQuiz.data() as FirestoreQuiz).createdAt
+        : new Date().toISOString()
     };
     const sanitized = sanitizeForFirestore(quizDoc);
-    await setDoc(doc(db, 'quizzes', quiz.id), sanitized);
+    await setDoc(quizRef, sanitized);
 
     // Log quiz sharing activity
     await logActivity(
@@ -261,8 +308,13 @@ export const getPublicQuizzes = async (): Promise<FirestoreQuiz[]> => {
     const q = dbQuery(quizzesRef, where('isPublic', '==', true));
     const querySnapshot = await getDocs(q);
     const quizzes: FirestoreQuiz[] = [];
-    querySnapshot.forEach((doc) => {
-      quizzes.push(doc.data() as FirestoreQuiz);
+    querySnapshot.forEach((document) => {
+      try {
+        const quiz = document.data() as FirestoreQuiz;
+        quizzes.push({ ...quiz, id: document.id, questions: normalizeStoredQuestions(quiz.questions) });
+      } catch (error) {
+        console.warn(`Se omitió el cuestionario inválido ${document.id}.`, error);
+      }
     });
     // Sort in memory to avoid the need for a Firestore composite index
     return quizzes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -292,17 +344,18 @@ export const deleteQuiz = async (quizId: string): Promise<void> => {
 // PROGRESS & ATTEMPTS
 export const saveQuizAttempt = async (attempt: Omit<QuizAttempt, 'id'>): Promise<QuizAttempt> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== attempt.userUid) {
+      throw new Error('No tienes permiso para guardar este intento.');
+    }
     const attemptsRef = collection(db, 'attempts');
-    const sanitized = sanitizeForFirestore(attempt);
-    const newDocRef = await addDoc(attemptsRef, sanitized);
+    const newDocRef = doc(attemptsRef);
     
     const finalAttempt: QuizAttempt = {
       ...attempt,
       id: newDocRef.id
     };
     
-    // Save document ID inside the document itself
-    await updateDoc(newDocRef, { id: newDocRef.id });
+    await setDoc(newDocRef, sanitizeForFirestore(finalAttempt));
 
     // Log quiz completion activity
     await logActivity(
@@ -338,14 +391,29 @@ export const updateQuizAttemptQuestions = async (attemptId: string, updatedQuest
   }
 };
 
+export const updateQuizAttemptName = async (attemptId: string, quizName: string): Promise<void> => {
+  const trimmedName = quizName.trim().slice(0, 120);
+  if (!trimmedName) throw new Error('El nombre del cuestionario no puede estar vacío.');
+  await updateDoc(doc(db, 'attempts', attemptId), { quizName: trimmedName });
+};
+
+export const deleteQuizAttempt = async (attemptId: string): Promise<void> => {
+  await deleteDoc(doc(db, 'attempts', attemptId));
+};
+
 export const getUserAttempts = async (uid: string): Promise<QuizAttempt[]> => {
   try {
     const attemptsRef = collection(db, 'attempts');
     const q = dbQuery(attemptsRef, where('userUid', '==', uid));
     const querySnapshot = await getDocs(q);
     const attempts: QuizAttempt[] = [];
-    querySnapshot.forEach((doc) => {
-      attempts.push(doc.data() as QuizAttempt);
+    querySnapshot.forEach((document) => {
+      try {
+        const attempt = document.data() as QuizAttempt;
+        attempts.push({ ...attempt, id: document.id, questions: normalizeStoredQuestions(attempt.questions) });
+      } catch (error) {
+        console.warn(`Se omitió el intento inválido ${document.id}.`, error);
+      }
     });
     return attempts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   } catch (error) {
@@ -360,8 +428,13 @@ export const getQuizAttemptsByAllUsers = async (quizId: string): Promise<QuizAtt
     const q = dbQuery(attemptsRef, where('quizId', '==', quizId));
     const querySnapshot = await getDocs(q);
     const attempts: QuizAttempt[] = [];
-    querySnapshot.forEach((doc) => {
-      attempts.push(doc.data() as QuizAttempt);
+    querySnapshot.forEach((document) => {
+      try {
+        const attempt = document.data() as QuizAttempt;
+        attempts.push({ ...attempt, id: document.id, questions: normalizeStoredQuestions(attempt.questions) });
+      } catch (error) {
+        console.warn(`Se omitió el intento inválido ${document.id}.`, error);
+      }
     });
     return attempts;
   } catch (error) {
@@ -375,8 +448,13 @@ export const getAllAttempts = async (): Promise<QuizAttempt[]> => {
     const attemptsRef = collection(db, 'attempts');
     const querySnapshot = await getDocs(attemptsRef);
     const attempts: QuizAttempt[] = [];
-    querySnapshot.forEach((doc) => {
-      attempts.push(doc.data() as QuizAttempt);
+    querySnapshot.forEach((document) => {
+      try {
+        const attempt = document.data() as QuizAttempt;
+        attempts.push({ ...attempt, id: document.id, questions: normalizeStoredQuestions(attempt.questions) });
+      } catch (error) {
+        console.warn(`Se omitió el intento inválido ${document.id}.`, error);
+      }
     });
     return attempts;
   } catch (error) {
@@ -387,17 +465,12 @@ export const getAllAttempts = async (): Promise<QuizAttempt[]> => {
 
 export const addCompleterToQuiz = async (quizId: string, alias: string): Promise<void> => {
   try {
-    const quizRef = doc(db, 'quizzes', quizId);
-    const quizSnap = await getDoc(quizRef);
-    if (quizSnap.exists()) {
-      const data = quizSnap.data() as FirestoreQuiz;
-      const completers = data.completerAliases || [];
-      if (!completers.includes(alias)) {
-        await updateDoc(quizRef, {
-          completerAliases: [...completers, alias]
-        });
-      }
-    }
+    if (!auth.currentUser) return;
+    const normalizedAlias = alias.trim().slice(0, 80);
+    if (!normalizedAlias) return;
+    await updateDoc(doc(db, 'quizzes', quizId), {
+      completerAliases: arrayUnion(normalizedAlias),
+    });
   } catch (error) {
     console.error("Error adding completer to quiz:", error);
   }
@@ -410,6 +483,7 @@ export const sendQuizInvitation = async (
   quizName: string
 ): Promise<void> => {
   try {
+    if (!auth.currentUser) throw new Error('Debes iniciar sesión para enviar invitaciones.');
     const trimmedId = recipientIdentifier.trim();
     const usersRef = collection(db, 'users');
     
@@ -426,26 +500,26 @@ export const sendQuizInvitation = async (
       throw new Error("Usuario no encontrado con ese Alias o ID.");
     }
     
-    const targetUser = querySnapshot.docs[0].data() as FirebaseUser;
+    const targetUser = querySnapshot.docs[0].data() as UserDirectoryEntry;
     
     // Create the notification in Firestore
     const notificationsRef = collection(db, 'notifications');
-    const newDocRef = await addDoc(notificationsRef, {
+    const newDocRef = doc(notificationsRef);
+    await setDoc(newDocRef, {
+      id: newDocRef.id,
       recipientUid: targetUser.uid,
-      senderAlias,
+      senderAlias: senderAlias.trim().slice(0, 80),
       quizId,
-      quizName,
+      quizName: quizName.trim().slice(0, 120),
       status: 'unread',
+      type: 'invitation',
       createdAt: new Date().toISOString()
     });
-    
-    // Save document ID inside the notification itself
-    await updateDoc(newDocRef, { id: newDocRef.id });
 
     // Log quiz invitation activity
     await logActivity(
       'INVITATION_SENT', 
-      `${senderAlias} envió una invitación a ${targetUser.alias} (${targetUser.email}) para jugar '${quizName}'`, 
+      `${senderAlias} envió una invitación a ${targetUser.alias} para jugar '${quizName}'`,
       auth.currentUser?.uid || 'system', 
       senderAlias
     );
@@ -459,25 +533,30 @@ export const searchUsersByQuery = async (query: string): Promise<FirebaseUser[]>
   if (!query || query.trim().length < 2) return [];
   try {
     const trimmed = query.trim();
-    const usersRef = collection(db, 'users');
-    let results: FirebaseUser[] = [];
+    const usersRef = collection(db, 'user_directory');
+    let results: UserDirectoryEntry[] = [];
 
     if (trimmed.toUpperCase().startsWith('QZ-')) {
       // Search by exact readable ID
       const q = dbQuery(usersRef, where('readableId', '==', trimmed.toUpperCase()));
       const snap = await getDocs(q);
-      snap.forEach(doc => results.push(doc.data() as FirebaseUser));
+      snap.forEach(doc => results.push(doc.data() as UserDirectoryEntry));
     } else {
       // Search by alias: get all users and filter client-side (Firestore doesn't support prefix search natively)
       const snap = await getDocs(usersRef);
       snap.forEach(doc => {
-        const user = doc.data() as FirebaseUser;
+        const user = doc.data() as UserDirectoryEntry;
         if (user.alias?.toLowerCase().includes(trimmed.toLowerCase())) {
           results.push(user);
         }
       });
     }
-    return results.slice(0, 8); // Limit to 8 suggestions
+    return results.map(user => ({
+      ...user,
+      email: '',
+      role: 'student' as const,
+      createdAt: '',
+    })).slice(0, 8);
   } catch (error) {
     console.error('Error searching users:', error);
     return [];
@@ -511,12 +590,35 @@ export const markNotificationAsRead = async (notificationId: string): Promise<vo
   }
 };
 
+export const markOlderResumeNotificationsRead = async (
+  uid: string,
+  quizId: string,
+  currentNotificationId?: string,
+): Promise<string[]> => {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) return [];
+  const notificationsRef = collection(db, 'notifications');
+  const notificationsQuery = dbQuery(
+    notificationsRef,
+    where('recipientUid', '==', uid),
+    where('quizId', '==', quizId),
+    where('type', '==', 'resume_progress'),
+    where('status', '==', 'unread'),
+  );
+  const snapshot = await getDocs(notificationsQuery);
+  const notificationIds = snapshot.docs
+    .map(document => document.id)
+    .filter(id => id !== currentNotificationId);
+  await Promise.all(notificationIds.map(id => updateDoc(doc(db, 'notifications', id), { status: 'read' })));
+  return notificationIds;
+};
+
 export const getQuizById = async (quizId: string): Promise<FirestoreQuiz | null> => {
   try {
     const docRef = doc(db, 'quizzes', quizId);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      return docSnap.data() as FirestoreQuiz;
+      const quiz = docSnap.data() as FirestoreQuiz;
+      return { ...quiz, id: docSnap.id, questions: normalizeStoredQuestions(quiz.questions) };
     }
     return null;
   } catch (error) {
@@ -532,6 +634,9 @@ export const toggleQuizFavorite = async (
   currentFavorites: string[] = []
 ): Promise<string[]> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== userId) {
+      throw new Error('No tienes permiso para modificar estos favoritos.');
+    }
     const userDocRef = doc(db, 'users', userId);
     let updatedFavorites: string[];
     
@@ -566,38 +671,23 @@ export const reportQuiz = async (
   reason: string
 ): Promise<void> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== reporterUid) {
+      throw new Error('No tienes permiso para crear este reporte.');
+    }
+    const normalizedReason = reason.trim().slice(0, 1_000);
+    if (!normalizedReason) throw new Error('Debes indicar un motivo.');
     const reportsRef = collection(db, 'quiz_reports');
-    const newDocRef = await addDoc(reportsRef, {
+    const newDocRef = doc(reportsRef);
+    await setDoc(newDocRef, {
+      id: newDocRef.id,
       quizId,
-      quizName,
+      quizName: quizName.trim().slice(0, 120),
       reporterUid,
-      reporterAlias,
-      reason: reason.trim(),
+      reporterAlias: reporterAlias.trim().slice(0, 80),
+      reason: normalizedReason,
       status: 'pending',
       createdAt: new Date().toISOString()
     });
-    await updateDoc(newDocRef, { id: newDocRef.id });
-
-    // Notify all admins via system notifications
-    const usersRef = collection(db, 'users');
-    const adminQuery = query(usersRef, where('role', '==', 'admin'));
-    const adminSnapshot = await getDocs(adminQuery);
-    
-    const notificationsRef = collection(db, 'notifications');
-    for (const docSnap of adminSnapshot.docs) {
-      const adminData = docSnap.data();
-      const adminDocRef = await addDoc(notificationsRef, {
-        recipientUid: adminData.uid,
-        senderAlias: reporterAlias,
-        quizId,
-        quizName,
-        status: 'unread',
-        type: 'quiz_report',
-        detailsText: reason.trim(),
-        createdAt: new Date().toISOString()
-      });
-      await updateDoc(adminDocRef, { id: adminDocRef.id });
-    }
 
     // Log report activity
     await logActivity(
@@ -658,60 +748,43 @@ export const submitQuestionFeedback = async (
   creatorUid: string
 ): Promise<void> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== userUid) {
+      throw new Error('No tienes permiso para enviar esta valoración.');
+    }
+    const normalizedComment = comment.trim().slice(0, 1_000);
     const feedbackRef = collection(db, 'question_feedback');
-    const newDocRef = await addDoc(feedbackRef, {
+    const newDocRef = doc(feedbackRef);
+    await setDoc(newDocRef, {
+      id: newDocRef.id,
       quizId,
-      quizName,
+      quizName: quizName.trim().slice(0, 120),
       questionId,
-      questionText,
+      questionText: questionText.trim().slice(0, 2_000),
       userUid,
-      userAlias,
+      userAlias: userAlias.trim().slice(0, 80),
       evaluation,
-      comment: comment.trim(),
+      comment: normalizedComment,
       creatorUid,
       createdAt: new Date().toISOString()
     });
-    await updateDoc(newDocRef, { id: newDocRef.id });
 
     const notificationsRef = collection(db, 'notifications');
     
     // Notify the quiz creator if they are not the feedback author
     if (creatorUid && creatorUid !== userUid) {
-      const creatorDocRef = await addDoc(notificationsRef, {
+      const creatorDocRef = doc(notificationsRef);
+      await setDoc(creatorDocRef, {
+        id: creatorDocRef.id,
         recipientUid: creatorUid,
-        senderAlias: userAlias,
+        senderAlias: userAlias.trim().slice(0, 80),
         quizId,
-        quizName,
+        quizName: quizName.trim().slice(0, 120),
         status: 'unread',
         type: 'question_feedback',
-        questionText,
-        detailsText: comment.trim() || (evaluation === 'good' ? 'Valoración positiva' : 'Valoración negativa'),
+        questionText: questionText.trim().slice(0, 2_000),
+        detailsText: normalizedComment || (evaluation === 'good' ? 'Valoración positiva' : 'Valoración negativa'),
         createdAt: new Date().toISOString()
       });
-      await updateDoc(creatorDocRef, { id: creatorDocRef.id });
-    }
-
-    // Also notify all admins
-    const usersRef = collection(db, 'users');
-    const adminQuery = query(usersRef, where('role', '==', 'admin'));
-    const adminSnapshot = await getDocs(adminQuery);
-    
-    for (const docSnap of adminSnapshot.docs) {
-      const adminData = docSnap.data();
-      if (adminData.uid !== userUid) {
-        const adminDocRef = await addDoc(notificationsRef, {
-          recipientUid: adminData.uid,
-          senderAlias: userAlias,
-          quizId,
-          quizName,
-          status: 'unread',
-          type: 'question_feedback',
-          questionText,
-          detailsText: comment.trim() || (evaluation === 'good' ? 'Valoración positiva' : 'Valoración negativa'),
-          createdAt: new Date().toISOString()
-        });
-        await updateDoc(adminDocRef, { id: adminDocRef.id });
-      }
     }
 
     // Log feedback activity
@@ -745,6 +818,7 @@ export const getQuestionFeedback = async (): Promise<any[]> => {
 // ACTIVE PROGRESS & PAUSED QUIZZES SYNCING
 export const updateActiveQuizProgress = async (uid: string, activeQuiz: ActiveQuiz | null): Promise<void> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== uid) return;
     const userRef = doc(db, 'users', uid);
     const sanitized = activeQuiz ? sanitizeForFirestore(activeQuiz) : null;
     await updateDoc(userRef, { activeQuizProgress: sanitized });
@@ -753,18 +827,22 @@ export const updateActiveQuizProgress = async (uid: string, activeQuiz: ActiveQu
   }
 };
 
-export const updatePausedQuizzesInDb = async (uid: string, pausedQuizzes: ActiveQuiz[]): Promise<void> => {
+export const updatePausedQuizzesInDb = async (uid: string, pausedQuizzes: ActiveQuiz[]): Promise<boolean> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== uid) return false;
     const userRef = doc(db, 'users', uid);
     const sanitized = pausedQuizzes.map(q => sanitizeForFirestore(q));
     await updateDoc(userRef, { pausedQuizzes: sanitized });
+    return true;
   } catch (err) {
     console.error("Error updating paused quizzes in Firestore:", err);
+    return false;
   }
 };
 
 export const updateUserThemeSettings = async (uid: string, themeSettings: ThemeSettings): Promise<void> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== uid) return;
     const userRef = doc(db, 'users', uid);
     await updateDoc(userRef, { themeSettings: sanitizeForFirestore(themeSettings) });
   } catch (err) {
@@ -780,18 +858,22 @@ export const createResumeNotification = async (
   initialDetails: string
 ): Promise<string> => {
   try {
+    if (!auth.currentUser || auth.currentUser.uid !== uid) {
+      throw new Error('No tienes permiso para crear este recordatorio.');
+    }
     const notificationsRef = collection(db, 'notifications');
-    const newDocRef = await addDoc(notificationsRef, {
+    const newDocRef = doc(notificationsRef);
+    await setDoc(newDocRef, {
+      id: newDocRef.id,
       recipientUid: uid,
-      senderAlias,
+      senderAlias: senderAlias.trim().slice(0, 80),
       quizId,
-      quizName,
+      quizName: quizName.trim().slice(0, 120),
       status: 'unread',
       type: 'resume_progress',
-      detailsText: initialDetails,
+      detailsText: initialDetails.trim().slice(0, 500),
       createdAt: new Date().toISOString()
     });
-    await updateDoc(newDocRef, { id: newDocRef.id });
     return newDocRef.id;
   } catch (error) {
     console.error("Error creating resume notification:", error);
@@ -842,4 +924,3 @@ export function sanitizeForFirestore<T>(obj: T): T {
   }
   return obj;
 }
-

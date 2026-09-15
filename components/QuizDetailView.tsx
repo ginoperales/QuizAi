@@ -9,6 +9,7 @@ interface QuizDetailViewProps {
   currentUser: FirebaseUser | null;
   onGoBack: () => void;
   onRetake: (id: string) => void;
+  onRestartQuiz?: (quiz: CompletedQuiz) => void;
   toggleFavorite: (question: Question) => void;
   isFavorite: (questionId: string) => boolean;
   onStudy: (quiz: CompletedQuiz | ActiveQuiz) => void;
@@ -21,6 +22,7 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({
   currentUser,
   onGoBack, 
   onRetake, 
+  onRestartQuiz,
   toggleFavorite, 
   isFavorite, 
   onStudy, 
@@ -108,6 +110,16 @@ const QuizDetailView: React.FC<QuizDetailViewProps> = ({
                 <RectangleStackIcon className="h-5 w-5" />
                 <span>{t('studyWithFlashcards')}</span>
             </button>
+            {onRestartQuiz && (
+              <button 
+                onClick={() => onRestartQuiz(quiz)} 
+                className="flex items-center space-x-2 px-4 py-2 bg-amber-500 text-white rounded-md text-sm font-semibold hover:bg-amber-600 transition-colors shadow-sm active:scale-95"
+                title="Reiniciar y responder este cuestionario desde la primera pregunta"
+              >
+                <RefreshIcon className="h-5 w-5" />
+                <span>Volver a hacer</span>
+              </button>
+            )}
             <button onClick={() => onRetake(quiz.id)} className="flex items-center space-x-2 px-4 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] transition-colors">
               <PencilSquareIcon className="h-5 w-5" />
               <span>{t('editAndRetake')}</span>

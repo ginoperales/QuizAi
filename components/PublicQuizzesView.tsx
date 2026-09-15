@@ -29,6 +29,7 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [selectedMode, setSelectedMode] = useState<string>('All');
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
+  const [selectedOwnership, setSelectedOwnership] = useState<'all' | 'mine' | 'others'>('all');
 
   // Sharing states
   const [sharingQuiz, setSharingQuiz] = useState<FirestoreQuiz | null>(null);
@@ -99,10 +100,14 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
       const matchesDifficulty = selectedDifficulty === 'All' || quiz.difficulty === selectedDifficulty;
       const matchesMode = selectedMode === 'All' || quiz.mode === selectedMode;
       const matchesFavorites = !showOnlyFavorites || favoriteQuizzes.includes(quiz.id);
+      const matchesOwnership = 
+        selectedOwnership === 'all' ||
+        (selectedOwnership === 'mine' && quiz.creatorUid === currentUser?.uid) ||
+        (selectedOwnership === 'others' && quiz.creatorUid !== currentUser?.uid);
 
-      return matchesSearch && matchesDifficulty && matchesMode && matchesFavorites;
+      return matchesSearch && matchesDifficulty && matchesMode && matchesFavorites && matchesOwnership;
     });
-  }, [quizzes, searchQuery, selectedDifficulty, selectedMode, showOnlyFavorites, favoriteQuizzes]);
+  }, [quizzes, searchQuery, selectedDifficulty, selectedMode, showOnlyFavorites, favoriteQuizzes, selectedOwnership, currentUser?.uid]);
 
   const handleStartReto = (quiz: FirestoreQuiz) => {
     if (!currentUser) {
@@ -237,19 +242,76 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
       </div>
 
       {/* Search & Filter Premium Box */}
-      <div className="backdrop-blur-md bg-white/50 dark:bg-gray-800/40 border border-white/20 dark:border-gray-700/20 shadow-xl rounded-2xl p-6 flex flex-col md:flex-row gap-4 items-center">
-        <div className="relative w-full md:flex-1">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Buscar por título o creador..."
-            className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] focus:border-transparent transition-all outline-none"
-          />
-          <svg className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+      <div className="backdrop-blur-md bg-white/50 dark:bg-gray-800/40 border border-white/20 dark:border-gray-700/20 shadow-xl rounded-2xl p-6 flex flex-col gap-4">
+        {/* Ownership filter tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-150 dark:border-gray-700/50 pb-3">
+          <div className="flex items-center gap-1.5 p-1 bg-gray-100 dark:bg-gray-800/90 rounded-xl border border-gray-200 dark:border-gray-700/60 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setSelectedOwnership('all')}
+              className={`flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                selectedOwnership === 'all'
+                  ? 'bg-white dark:bg-gray-700 text-[rgb(var(--primary-600))] dark:text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <span>{t('filterAll') || 'Todos'}</span>
+              <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300">
+                {quizzes.length}
+              </span>
+            </button>
+            
+            {currentUser && (
+              <button
+                type="button"
+                onClick={() => setSelectedOwnership('mine')}
+                className={`flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  selectedOwnership === 'mine'
+                    ? 'bg-white dark:bg-gray-700 text-[rgb(var(--primary-600))] dark:text-white shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+              >
+                <span>{t('filterMine') || 'Mis Cuestionarios'}</span>
+                <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300">
+                  {quizzes.filter(q => q.creatorUid === currentUser.uid).length}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setSelectedOwnership('others')}
+              className={`flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                selectedOwnership === 'others'
+                  ? 'bg-white dark:bg-gray-700 text-[rgb(var(--primary-600))] dark:text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <span>{t('filterOthers') || 'De Otros'}</span>
+              <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300">
+                {currentUser ? quizzes.filter(q => q.creatorUid !== currentUser.uid).length : quizzes.length}
+              </span>
+            </button>
+          </div>
+
+          <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+            Mostrando <span className="font-bold text-gray-900 dark:text-white">{filteredQuizzes.length}</span> retos
+          </p>
         </div>
+
+        <div className="flex flex-col md:flex-row gap-4 items-center">
+          <div className="relative w-full md:flex-1">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar por título o creador..."
+              className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] focus:border-transparent transition-all outline-none"
+            />
+            <svg className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
 
         <div className="flex w-full md:w-auto gap-4 flex-wrap">
           {currentUser && (
@@ -295,6 +357,7 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
           </select>
         </div>
       </div>
+    </div>
 
       {/* Grid of Public Quizzes */}
       {filteredQuizzes.length === 0 ? (
@@ -428,7 +491,7 @@ const PublicQuizzesView: React.FC<PublicQuizzesViewProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    Empezar Reto
+                    {completers.includes(currentUser?.alias || '') ? 'Volver a hacer Reto' : 'Empezar Reto'}
                   </button>
                   
                   <button

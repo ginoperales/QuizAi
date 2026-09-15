@@ -58,109 +58,15 @@
     <!-- =========================================
          SCRIPTS & STYLES
     ========================================== -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-      }
-    </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0"
-  }
-}
-</script>
-<style>
-  :root {
-    --primary-50: 238 242 255;
-    --primary-100: 224 231 255;
-    --primary-200: 199 210 254;
-    --primary-300: 165 180 252;
-    --primary-400: 129 140 248;
-    --primary-500: 99 102 241;
-    --primary-600: 79 70 229;
-    --primary-700: 67 56 202;
-    --primary-800: 55 48 163;
-    --primary-900: 49 46 129;
-    --primary-950: 30 27 75;
-  }
-
-  /* Premium Correct Pop Animation (Springy scale-up bounce) */
-  @keyframes correct-pop {
-    0% { transform: scale(0.92); opacity: 0.8; }
-    50% { transform: scale(1.05); }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  .animate-correct-pop {
-    animation: correct-pop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-  }
-
-  /* Premium Incorrect Shake Animation (Fluid side-to-side jitter) */
-  @keyframes incorrect-shake {
-    0%, 100% { transform: translateX(0); }
-    20%, 60% { transform: translateX(-8px); }
-    40%, 80% { transform: translateX(8px); }
-  }
-  .animate-incorrect-shake {
-    animation: incorrect-shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
-  }
-
-  /* Pulsing shadow glows */
-  @keyframes green-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.3); }
-    50% { box-shadow: 0 0 16px 6px rgba(16, 185, 129, 0.5); }
-  }
-  .animate-green-glow {
-    animation: green-glow 1.5s infinite;
-  }
-
-  @keyframes red-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3); }
-    50% { box-shadow: 0 0 16px 6px rgba(239, 68, 68, 0.5); }
-  }
-  .animate-red-glow {
-    animation: red-glow 1.5s infinite;
-  }
-
-  /* Confetti Celebration Particle Fall & Twist */
-  @keyframes confetti-fall {
-    0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; }
-    100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
-  }
-  .confetti-piece {
-    position: fixed;
-    top: -5vh;
-    animation: confetti-fall 3.5s linear forwards;
-    z-index: 150;
-    pointer-events: none;
-  }
-</style>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+      integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw"
+      crossorigin="anonymous"
+    ></script>
 </head>
   <body class="bg-gray-100 dark:bg-gray-900">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
 
-    <!-- =========================================
-         SERVICE WORKER REGISTRATION (PWA)
-    ========================================== -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-          navigator.serviceWorker.register('/sw.js')
-            .then(function(registration) {
-              console.log('[QuizAI] Service Worker registrado con éxito:', registration.scope);
-            })
-            .catch(function(err) {
-              console.warn('[QuizAI] Service Worker: fallo al registrar:', err);
-            });
-        });
-      }
-    </script>
   </body>
 </html>

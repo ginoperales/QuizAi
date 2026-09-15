@@ -4,6 +4,10 @@ import { generateQuestionsFromText, generateQuestionsFromImage } from '../servic
 import { parseSpreadsheet, readFileAsText, readFileAsBase64, downloadExcelTemplate } from '../services/fileService';
 import { UploadIcon, DownloadIcon } from './icons';
 
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 1024 * 1024;
+const SUPPORTED_EXTENSIONS = new Set(['txt', 'md', 'csv', 'xlsx', 'png', 'jpg', 'jpeg', 'webp']);
+
 interface QuizGeneratorProps {
   currentUser: FirebaseUser | null;
   onTriggerAuth: () => void;
@@ -26,6 +30,18 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAut
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
+      const extension = selectedFile.name.split('.').pop()?.toLowerCase() || '';
+      const maxBytes = selectedFile.type.startsWith('image/') ? MAX_IMAGE_BYTES : MAX_DOCUMENT_BYTES;
+      if (!SUPPORTED_EXTENSIONS.has(extension) || selectedFile.size === 0 || selectedFile.size > maxBytes) {
+        setFile(null);
+        setFileName('');
+        e.target.value = '';
+        onGenerationFailed(selectedFile.size > maxBytes
+          ? `El archivo supera el límite de ${maxBytes / 1024 / 1024} MB.`
+          : 'El archivo está vacío o su formato no es compatible.');
+        return;
+      }
+      onGenerationFailed('');
       setFile(selectedFile);
       setFileName(selectedFile.name);
     }
@@ -45,8 +61,10 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAut
     onGenerationFailed(''); // Clear previous errors
 
     try {
-        if (file.type.includes('sheet') || file.name.endsWith('.csv') || file.name.endsWith('.xlsx')) {
+        const lowerName = file.name.toLowerCase();
+        if (file.type.includes('sheet') || lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx')) {
             const questions = await parseSpreadsheet(file);
+            if (questions.length === 0) throw new Error('La hoja no contiene preguntas válidas.');
             onQuizGenerated(questions, difficulty, isTimed, explanationStyle, quizMode);
         } else if (file.type.startsWith('image/')) {
             const { mimeType, data } = await readFileAsBase64(file);
@@ -66,7 +84,7 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAut
     } finally {
         setIsLoading(false);
     }
-  }, [file, difficulty, isTimed, explanationStyle, quizMode, customPrompt, onQuizGenerated, onGenerationFailed, setIsLoading, t]);
+  }, [currentUser, file, difficulty, isTimed, explanationStyle, quizMode, customPrompt, onTriggerAuth, onQuizGenerated, onGenerationFailed, setIsLoading, t]);
   
   const difficultyLevels = Object.values(Difficulty);
   const quizModes = ['MultipleChoice', 'Written'] as QuizMode[];
@@ -157,6 +175,7 @@ const QuizGenerator: React.FC<QuizGeneratorProps> = ({ currentUser, onTriggerAut
                 rows={3}
                 value={customPrompt}
                 onChange={(e) => setCustomPrompt(e.target.value)}
+                maxLength={500}
                 className="mt-1 block w-full pl-3 pr-4 py-2 text-base border-gray-300 focus:outline-none focus:ring-[rgb(var(--primary-500))] focus:border-[rgb(var(--primary-500))] sm:text-sm rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                 placeholder={t('promptPlaceholder')}
             />

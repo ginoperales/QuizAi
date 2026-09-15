@@ -63,6 +63,8 @@ export interface CompletedQuiz {
     score: number;
     totalQuestions: number; // For MCQ: number of questions. For Written: number of questions * 100
     date: string;
+    creatorUid?: string;
+    creatorAlias?: string;
 }
 
 export enum Difficulty {
@@ -145,4 +147,6 @@ export interface QuizAttempt {
   date: string;
   userAnswers: { [questionId: string]: number };
   writtenUserAnswers?: { [questionId: string]: { text: string; score: number; feedback: string; } };
+  creatorUid?: string;
+  creatorAlias?: string;
 }

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { CompletedQuiz, ActiveQuiz } from '../types';
+import { CompletedQuiz, ActiveQuiz, FirebaseUser } from '../types';
 import { HistoryIcon, TrashIcon, RefreshIcon, EllipsisVerticalIcon, DocumentChartBarIcon, FileTextIcon, KeyIcon, PencilSquareIcon, RectangleStackIcon, TableIcon } from './icons';
 import { exportQuizReportToPdf, exportQuizForEvaluationToPdf, exportQuizWithKeyToPdf, exportQuizBackupToExcel } from '../services/fileService';
 import { decodeHtml } from '../services/fileService';
@@ -10,16 +10,30 @@ type ExportType = 'report' | 'evaluation' | 'key' | 'backup';
 interface HistoryViewProps {
   completedHistory: CompletedQuiz[];
   pausedHistory: ActiveQuiz[];
+  currentUser?: FirebaseUser | null;
   onDelete: (id: string, type: QuizType) => void;
   onViewDetails: (id: string) => void;
   onRetake: (id: string) => void;
   onResume: (id: string) => void;
+  onRestartQuiz: (quiz: CompletedQuiz | ActiveQuiz) => void;
   onRename: (id: string, newName: string, type: QuizType) => void;
   onStudy: (quiz: CompletedQuiz | ActiveQuiz) => void;
   t: (key: any, options?: Record<string, string | number>) => string;
 }
 
-const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHistory, onDelete, onViewDetails, onRetake, onResume, onRename, onStudy, t }) => {
+const HistoryView: React.FC<HistoryViewProps> = ({ 
+  completedHistory, 
+  pausedHistory, 
+  currentUser,
+  onDelete, 
+  onViewDetails, 
+  onRetake, 
+  onResume, 
+  onRestartQuiz,
+  onRename, 
+  onStudy, 
+  t 
+}) => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -27,6 +41,9 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
   const [editingName, setEditingName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedOwnership, setSelectedOwnership] = useState<'all' | 'mine' | 'others'>('all');
+  const [selectedStatus, setSelectedStatus] = useState<'all' | 'completed' | 'paused'>('all');
 
   const allQuizzes = useMemo(() => {
     const completed = completedHistory.map(q => ({...q, type: 'completed' as const, dateValue: new Date(q.date) }));
@@ -43,8 +60,31 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
     
     return [...completed, ...paused].sort((a, b) => b.dateValue.getTime() - a.dateValue.getTime());
   }, [completedHistory, pausedHistory]);
+
+  const filteredQuizzes = useMemo(() => {
+    return allQuizzes.filter(quiz => {
+      const name = quiz.name || '';
+      const creator = quiz.creatorAlias || '';
+      const matchesSearch = !searchQuery.trim() || 
+        name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        creator.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      const isMine = !quiz.creatorUid || (currentUser && quiz.creatorUid === currentUser.uid);
+      const matchesOwnership = 
+        selectedOwnership === 'all' ||
+        (selectedOwnership === 'mine' && isMine) ||
+        (selectedOwnership === 'others' && !isMine);
+
+      const matchesStatus = 
+        selectedStatus === 'all' || 
+        (selectedStatus === 'completed' && quiz.type === 'completed') || 
+        (selectedStatus === 'paused' && quiz.type === 'paused');
+
+      return matchesSearch && matchesOwnership && matchesStatus;
+    });
+  }, [allQuizzes, searchQuery, selectedOwnership, selectedStatus, currentUser]);
   
-  const isAllSelected = allQuizzes.length > 0 && selectedIds.length === allQuizzes.length;
+  const isAllSelected = filteredQuizzes.length > 0 && selectedIds.length === filteredQuizzes.length;
 
   const handleSelect = (id: string) => {
       setSelectedIds(prev =>
@@ -54,7 +94,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.checked) {
-          setSelectedIds(allQuizzes.map(q => q.id));
+          setSelectedIds(filteredQuizzes.map(q => q.id));
       } else {
           setSelectedIds([]);
       }
@@ -172,24 +212,134 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
   }
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{t('history')}</h2>
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{t('history')}</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Total de {allQuizzes.length} cuestionarios ({completedHistory.length} completados, {pausedHistory.length} en pausa)
+          </p>
+        </div>
         <div className="flex items-center">
             <input
                 id="select-all"
                 type="checkbox"
                 onChange={handleSelectAll}
                 checked={isAllSelected}
-                disabled={allQuizzes.length === 0}
+                disabled={filteredQuizzes.length === 0}
                 className="h-5 w-5 rounded border-gray-300 text-[rgb(var(--primary-600))] focus:ring-[rgb(var(--primary-500))] dark:bg-gray-700 dark:border-gray-600"
             />
             <label htmlFor="select-all" className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">{t('selectAll')}</label>
         </div>
       </div>
 
-      <ul className={`space-y-4 ${selectedIds.length > 0 ? 'pb-24' : ''}`}>
-        {allQuizzes.map((quiz) => {
+      {/* Filter and search bar */}
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-150 dark:border-gray-700 space-y-3">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar en historial por nombre o creador..."
+              className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-[rgb(var(--primary-500))] outline-none"
+            />
+            <svg className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+
+          {/* Status filter */}
+          <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700 text-xs">
+            <button
+              type="button"
+              onClick={() => setSelectedStatus('all')}
+              className={`px-2.5 py-1.5 rounded-md font-bold transition-all ${
+                selectedStatus === 'all'
+                  ? 'bg-white dark:bg-gray-700 text-[rgb(var(--primary-600))] dark:text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400'
+              }`}
+            >
+              Todos
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedStatus('completed')}
+              className={`px-2.5 py-1.5 rounded-md font-bold transition-all ${
+                selectedStatus === 'completed'
+                  ? 'bg-white dark:bg-gray-700 text-green-600 dark:text-green-400 shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400'
+              }`}
+            >
+              Completados
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedStatus('paused')}
+              className={`px-2.5 py-1.5 rounded-md font-bold transition-all ${
+                selectedStatus === 'paused'
+                  ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400'
+              }`}
+            >
+              En Pausa
+            </button>
+          </div>
+        </div>
+
+        {/* Ownership filter pills */}
+        <div className="flex items-center gap-2 pt-1 border-t border-gray-100 dark:border-gray-700/60 text-xs">
+          <span className="text-gray-400 dark:text-gray-500 font-semibold uppercase tracking-wider text-[10px]">Autoría:</span>
+          <button
+            type="button"
+            onClick={() => setSelectedOwnership('all')}
+            className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+              selectedOwnership === 'all'
+                ? 'bg-[rgb(var(--primary-600))] text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedOwnership('mine')}
+            className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+              selectedOwnership === 'mine'
+                ? 'bg-[rgb(var(--primary-600))] text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            Creados por mí
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedOwnership('others')}
+            className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+              selectedOwnership === 'others'
+                ? 'bg-[rgb(var(--primary-600))] text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            De otros creadores
+          </button>
+        </div>
+      </div>
+
+      {filteredQuizzes.length === 0 ? (
+        <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <HistoryIcon className="mx-auto h-10 w-10 text-gray-400" />
+          <p className="mt-3 text-base font-semibold text-gray-700 dark:text-gray-300">No se encontraron cuestionarios con estos filtros</p>
+          <button 
+            onClick={() => { setSearchQuery(''); setSelectedOwnership('all'); setSelectedStatus('all'); }}
+            className="mt-2 text-xs font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] hover:underline"
+          >
+            Restablecer filtros
+          </button>
+        </div>
+      ) : (
+        <ul className={`space-y-4 ${selectedIds.length > 0 ? 'pb-24' : ''}`}>
+          {filteredQuizzes.map((quiz) => {
             const isPaused = quiz.type === 'paused';
             const isWritten = quiz.mode === 'Written';
             const totalValue = quiz.questions.length;
@@ -259,6 +409,12 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
                           <div className="bg-[rgb(var(--primary-600))] h-2.5 rounded-full" style={{ width: `${percentage}%` }}></div>
                       </div>
                       
+                      {quiz.creatorAlias && (
+                        <p className="text-xs text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-semibold mb-1">
+                          Creado por: @{quiz.creatorAlias}
+                        </p>
+                      )}
+                      
                       <p className="text-sm text-gray-500 dark:text-gray-400">
                           {quiz.dateValue.toLocaleString()}
                       </p>
@@ -267,11 +423,12 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
                     {isPaused ? (
                       <>
                         <button 
-                            onClick={() => onRetake(quiz.id)}
-                            className="px-3 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] transition-colors flex items-center gap-1"
+                            onClick={() => onRestartQuiz(quiz)}
+                            className="px-3 py-2 bg-amber-500 text-white rounded-md text-sm font-medium hover:bg-amber-600 transition-colors flex items-center gap-1 shadow-sm"
+                            title="Reiniciar y responder este cuestionario desde el inicio"
                         >
-                            <PencilSquareIcon className="h-4 w-4" />
-                            <span className="hidden sm:inline">Editar</span>
+                            <RefreshIcon className="h-4 w-4" />
+                            <span className="hidden sm:inline">Volver a hacer</span>
                         </button>
                         <button 
                             onClick={() => onResume(quiz.id)}
@@ -279,21 +436,36 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
                         >
                             {t('resume')}
                         </button>
+                        <button 
+                            onClick={() => onRetake(quiz.id)}
+                            className="px-2.5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center gap-1"
+                            title="Editar preguntas del cuestionario"
+                        >
+                            <PencilSquareIcon className="h-4 w-4" />
+                        </button>
                       </>
                     ) : (
                       <>
                         <button 
-                            onClick={() => onRetake(quiz.id)}
-                            className="px-3 py-2 bg-[rgb(var(--primary-600))] text-white rounded-md text-sm font-medium hover:bg-[rgb(var(--primary-700))] transition-colors flex items-center gap-1"
+                            onClick={() => onRestartQuiz(quiz)}
+                            className="px-3 py-2 bg-amber-500 text-white rounded-md text-sm font-medium hover:bg-amber-600 transition-colors flex items-center gap-1 shadow-sm"
+                            title="Reiniciar y responder este cuestionario desde el inicio"
                         >
-                            <PencilSquareIcon className="h-4 w-4" />
-                            <span className="hidden sm:inline">Editar</span>
+                            <RefreshIcon className="h-4 w-4" />
+                            <span className="hidden sm:inline">Volver a hacer</span>
                         </button>
                         <button 
                             onClick={() => onViewDetails(quiz.id)}
                             className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 transition-colors"
                         >
                             {t('viewDetails')}
+                        </button>
+                        <button 
+                            onClick={() => onRetake(quiz.id)}
+                            className="px-2.5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center gap-1"
+                            title="Editar preguntas del cuestionario"
+                        >
+                            <PencilSquareIcon className="h-4 w-4" />
                         </button>
                       </>
                     )}
@@ -306,8 +478,12 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
                               <EllipsisVerticalIcon className="h-5 w-5" />
                           </button>
                           {openMenuId === quiz.id && (
-                              <div className="origin-top-right absolute right-0 mt-2 w-60 rounded-md shadow-lg bg-white dark:bg-gray-800 ring-1 ring-black ring-opacity-5 focus:outline-none z-20">
+                              <div className="origin-top-right absolute right-0 mt-2 w-64 rounded-md shadow-lg bg-white dark:bg-gray-800 ring-1 ring-black ring-opacity-5 focus:outline-none z-20">
                                   <div className="py-1" role="menu" aria-orientation="vertical" aria-labelledby="options-menu">
+                                      <button onClick={() => { onRestartQuiz(quiz); setOpenMenuId(null); }} className="w-full text-left flex items-center px-4 py-2 text-sm text-amber-600 dark:text-amber-400 hover:bg-gray-100 dark:hover:bg-gray-700 font-medium" role="menuitem">
+                                          <RefreshIcon className="mr-3 h-5 w-5 text-amber-500" />
+                                          <span>Volver a hacer (Reiniciar)</span>
+                                      </button>
                                       <button onClick={() => { onStudy(quiz); setOpenMenuId(null); }} className="w-full text-left flex items-center px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700" role="menuitem">
                                           <RectangleStackIcon className="mr-3 h-5 w-5" />
                                           <span>{t('studyWithFlashcards')}</span>
@@ -353,9 +529,10 @@ const HistoryView: React.FC<HistoryViewProps> = ({ completedHistory, pausedHisto
                   </div>
                 </div>
               </li>
-            )
-        })}
-      </ul>
+            );
+          })}
+        </ul>
+      )}
 
       {selectedIds.length > 0 && (
           <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 p-4 shadow-lg z-20">

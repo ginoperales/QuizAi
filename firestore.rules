@@ -2,63 +2,294 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if user is admin
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function directoryPath(uid) {
+      return /databases/$(database)/documents/user_directory/$(uid);
+    }
+
+    function quizPath(quizId) {
+      return /databases/$(database)/documents/quizzes/$(quizId);
+    }
+
     function isAdmin() {
-      return request.auth != null && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.role == 'admin';
     }
 
-    // Users Collection
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function validString(value, maxLength) {
+      return value is string && value.size() > 0 && value.size() <= maxLength;
+    }
+
+    function validQuiz(data, quizId) {
+      return data.keys().hasAll([
+          'id', 'name', 'difficulty', 'isTimed', 'explanationStyle', 'mode',
+          'questions', 'creatorUid', 'creatorAlias', 'isPublic', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'name', 'difficulty', 'isTimed', 'explanationStyle', 'mode',
+          'questions', 'creatorUid', 'creatorAlias', 'isPublic', 'createdAt',
+          'completerAliases'
+        ])
+        && data.id == quizId
+        && validString(data.name, 120)
+        && data.difficulty in ['Easy', 'Medium', 'Hard']
+        && data.isTimed is bool
+        && data.mode in ['MultipleChoice', 'Written']
+        && data.questions is list
+        && data.questions.size() > 0
+        && data.questions.size() <= 200
+        && validString(data.creatorUid, 128)
+        && validString(data.creatorAlias, 80)
+        && data.isPublic is bool
+        && validString(data.createdAt, 40)
+        && (!data.keys().hasAny(['completerAliases'])
+          || (data.completerAliases is list && data.completerAliases.size() <= 500));
+    }
+
     match /users/{userId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      allow create: if request.auth != null;
-      allow update: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow get: if isSelf(userId) || isAdmin();
+      allow list: if isAdmin();
+
+      allow create: if isSelf(userId)
+        && request.resource.data.keys().hasAll(['uid', 'email', 'alias', 'readableId', 'role', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'alias', 'readableId', 'role', 'createdAt'])
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'student'
+        && request.resource.data.email == request.auth.token.email
+        && validString(request.resource.data.alias, 80)
+        && validString(request.resource.data.readableId, 20)
+        && validString(request.resource.data.createdAt, 40);
+
+      allow update: if isAdmin() || (isSelf(userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.readableId == resource.data.get('readableId', request.resource.data.readableId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'alias', 'readableId', 'favoriteQuizzes', 'activeQuizProgress', 'pausedQuizzes', 'themeSettings'
+        ]));
+
       allow delete: if isAdmin();
-      allow list: if request.auth != null; // Needed to check first user on signup and list for admin
     }
 
-    // Quizzes Collection
+    // Searchable invitation directory without private email, role or progress.
+    match /user_directory/{userId} {
+      allow read: if signedIn();
+      allow create, update: if (isSelf(userId) || isAdmin())
+        && request.resource.data.keys().hasAll(['uid', 'alias', 'readableId'])
+        && request.resource.data.keys().hasOnly(['uid', 'alias', 'readableId'])
+        && request.resource.data.uid == userId
+        && exists(userPath(userId))
+        && request.resource.data.alias == get(userPath(userId)).data.alias
+        && request.resource.data.readableId == get(userPath(userId)).data.readableId
+        && validString(request.resource.data.alias, 80)
+        && validString(request.resource.data.readableId, 20);
+      allow delete: if isSelf(userId) || isAdmin();
+    }
+
     match /quizzes/{quizId} {
-      allow read: if true; // Anyone can view quizzes, whether logged in or not
-      allow create: if request.auth != null;
-      allow update: if request.auth != null; // Allow logged-in users to update completers
-      allow delete: if request.auth != null && (resource.data.creatorUid == request.auth.uid || isAdmin());
+      allow get, list: if resource.data.isPublic == true
+        || (signedIn() && resource.data.creatorUid == request.auth.uid)
+        || isAdmin();
+
+      allow create: if signedIn()
+        && request.resource.data.creatorUid == request.auth.uid
+        && request.resource.data.creatorAlias == get(userPath(request.auth.uid)).data.alias
+        && validQuiz(request.resource.data, quizId);
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && resource.data.creatorUid == request.auth.uid
+          && request.resource.data.creatorUid == resource.data.creatorUid
+          && request.resource.data.creatorAlias == get(userPath(request.auth.uid)).data.alias
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.createdAt == resource.data.createdAt
+          && validQuiz(request.resource.data, quizId))
+        || (signedIn()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['completerAliases'])
+          && request.resource.data.completerAliases is list
+          && request.resource.data.completerAliases.size() <= 500
+          && request.resource.data.completerAliases.size() <= resource.data.get('completerAliases', []).size() + 1
+          && request.resource.data.completerAliases.hasAll(resource.data.get('completerAliases', []))
+          && exists(directoryPath(request.auth.uid))
+          && request.resource.data.completerAliases.hasAny([get(directoryPath(request.auth.uid)).data.alias]));
+
+      allow delete: if signedIn()
+        && (resource.data.creatorUid == request.auth.uid || isAdmin());
     }
 
-    // Attempts Collection
     match /attempts/{attemptId} {
-      allow read: if request.auth != null && (resource.data.userUid == request.auth.uid || isAdmin());
-      allow create: if request.auth != null && (request.resource.data.userUid == request.auth.uid);
-      allow delete: if isAdmin();
-      allow list: if request.auth != null && isAdmin(); // Only admins can list all attempts
+      allow get: if signedIn()
+        && (resource.data.userUid == request.auth.uid || isAdmin());
+      allow list: if isAdmin()
+        || (signedIn() && resource.data.userUid == request.auth.uid);
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll([
+          'id', 'quizId', 'quizName', 'questions', 'userUid', 'userAlias',
+          'score', 'totalQuestions', 'difficulty', 'mode', 'date', 'userAnswers'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'quizId', 'quizName', 'questions', 'userUid', 'userAlias',
+          'score', 'totalQuestions', 'difficulty', 'mode', 'date', 'userAnswers',
+          'writtenUserAnswers', 'creatorUid', 'creatorAlias'
+        ])
+        && request.resource.data.id == attemptId
+        && request.resource.data.userUid == request.auth.uid
+        && request.resource.data.userAlias == get(userPath(request.auth.uid)).data.alias
+        && validString(request.resource.data.quizName, 120)
+        && request.resource.data.questions is list
+        && request.resource.data.questions.size() > 0
+        && request.resource.data.questions.size() <= 200
+        && request.resource.data.score is number
+        && request.resource.data.score >= 0
+        && request.resource.data.totalQuestions is number
+        && request.resource.data.totalQuestions > 0
+        && request.resource.data.score <= request.resource.data.totalQuestions
+        && request.resource.data.difficulty in ['Easy', 'Medium', 'Hard']
+        && request.resource.data.mode in ['MultipleChoice', 'Written'];
+
+      allow update: if signedIn()
+        && resource.data.userUid == request.auth.uid
+        && request.resource.data.userUid == resource.data.userUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['questions', 'quizName'])
+        && request.resource.data.questions is list
+        && request.resource.data.questions.size() > 0
+        && request.resource.data.questions.size() <= 200
+        && validString(request.resource.data.quizName, 120);
+
+      allow delete: if signedIn()
+        && (resource.data.userUid == request.auth.uid || isAdmin());
     }
 
-    // Notifications Collection
     match /notifications/{notificationId} {
-      allow read, update, delete: if request.auth != null && (resource.data.recipientUid == request.auth.uid || isAdmin());
-      allow create: if request.auth != null;
+      function validNotification(data) {
+        return data.keys().hasAll([
+            'id', 'recipientUid', 'senderAlias', 'quizId', 'quizName',
+            'status', 'type', 'createdAt'
+          ])
+          && data.keys().hasOnly([
+            'id', 'recipientUid', 'senderAlias', 'quizId', 'quizName',
+            'status', 'type', 'createdAt', 'questionText', 'detailsText'
+          ])
+          && data.id == notificationId
+          && validString(data.recipientUid, 128)
+          && validString(data.senderAlias, 80)
+          && validString(data.quizName, 120)
+          && data.status == 'unread'
+          && data.type in ['invitation', 'question_feedback', 'resume_progress']
+          && validString(data.createdAt, 40)
+          && (!data.keys().hasAny(['questionText']) || (data.questionText is string && data.questionText.size() <= 2000))
+          && (!data.keys().hasAny(['detailsText']) || (data.detailsText is string && data.detailsText.size() <= 1000));
+      }
+
+      allow get: if signedIn()
+        && (resource.data.recipientUid == request.auth.uid || isAdmin());
+      allow list: if isAdmin()
+        || (signedIn() && resource.data.recipientUid == request.auth.uid);
+
+      allow create: if signedIn()
+        && validNotification(request.resource.data)
+        && (
+          (request.resource.data.type == 'resume_progress'
+            && request.resource.data.recipientUid == request.auth.uid)
+          || (request.resource.data.type == 'invitation'
+            && request.resource.data.senderAlias == get(userPath(request.auth.uid)).data.alias
+            && exists(directoryPath(request.resource.data.recipientUid))
+            && exists(quizPath(request.resource.data.quizId))
+            && get(quizPath(request.resource.data.quizId)).data.isPublic == true)
+          || (request.resource.data.type == 'question_feedback'
+            && request.resource.data.senderAlias == get(userPath(request.auth.uid)).data.alias
+            && exists(quizPath(request.resource.data.quizId))
+            && request.resource.data.recipientUid == get(quizPath(request.resource.data.quizId)).data.creatorUid)
+        );
+
+      allow update: if signedIn()
+        && (resource.data.recipientUid == request.auth.uid || isAdmin())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'detailsText'])
+        && request.resource.data.status in ['unread', 'read']
+        && (!request.resource.data.keys().hasAny(['detailsText'])
+          || (request.resource.data.detailsText is string && request.resource.data.detailsText.size() <= 1000));
+
+      allow delete: if signedIn()
+        && (resource.data.recipientUid == request.auth.uid || isAdmin());
     }
 
-    // Activity Logs Collection
     match /activity_logs/{logId} {
-      allow read, list: if request.auth != null && isAdmin();
-      allow create: if true; // Allow anyone/guests to log their activities
-      allow update, delete: if false; // Logs cannot be modified or deleted by anyone!
+      allow read: if isAdmin();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['userId', 'userAlias', 'action', 'details', 'timestamp'])
+        && request.resource.data.keys().hasOnly(['userId', 'userAlias', 'action', 'details', 'timestamp'])
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userAlias == get(userPath(request.auth.uid)).data.alias
+        && validString(request.resource.data.userAlias, 80)
+        && validString(request.resource.data.action, 80)
+        && validString(request.resource.data.details, 1000)
+        && validString(request.resource.data.timestamp, 40);
+      allow update, delete: if false;
     }
 
-    // Quiz Reports Collection
     match /quiz_reports/{reportId} {
-      allow read, list: if request.auth != null && isAdmin();
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null && isAdmin();
+      allow read: if isAdmin();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll([
+          'id', 'quizId', 'quizName', 'reporterUid', 'reporterAlias',
+          'reason', 'status', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'quizId', 'quizName', 'reporterUid', 'reporterAlias',
+          'reason', 'status', 'createdAt'
+        ])
+        && request.resource.data.id == reportId
+        && request.resource.data.reporterUid == request.auth.uid
+        && request.resource.data.reporterAlias == get(userPath(request.auth.uid)).data.alias
+        && request.resource.data.status == 'pending'
+        && validString(request.resource.data.quizName, 120)
+        && validString(request.resource.data.reason, 1000)
+        && exists(quizPath(request.resource.data.quizId));
+      allow update, delete: if isAdmin();
     }
 
-    // Question Feedback Collection
     match /question_feedback/{feedbackId} {
-      allow read, list: if request.auth != null && (resource.data.creatorUid == request.auth.uid || isAdmin());
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null && isAdmin();
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.creatorUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll([
+          'id', 'quizId', 'quizName', 'questionId', 'questionText', 'userUid',
+          'userAlias', 'evaluation', 'comment', 'creatorUid', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'quizId', 'quizName', 'questionId', 'questionText', 'userUid',
+          'userAlias', 'evaluation', 'comment', 'creatorUid', 'createdAt'
+        ])
+        && request.resource.data.id == feedbackId
+        && request.resource.data.userUid == request.auth.uid
+        && request.resource.data.userAlias == get(userPath(request.auth.uid)).data.alias
+        && request.resource.data.evaluation in ['good', 'bad']
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() <= 1000
+        && validString(request.resource.data.questionText, 2000)
+        && ((exists(quizPath(request.resource.data.quizId))
+            && request.resource.data.creatorUid == get(quizPath(request.resource.data.quizId)).data.creatorUid)
+          || request.resource.data.creatorUid == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

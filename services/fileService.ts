@@ -1,7 +1,6 @@
 import { Question, CompletedQuiz } from '../types';
 
 declare const XLSX: any; // From CDN script
-declare const jspdf: any; // From CDN script for jsPDF
 
 export const decodeHtml = (html: string | undefined): string => {
     if (typeof window === 'undefined' || !html) return html || '';
@@ -13,6 +12,12 @@ export const decodeHtml = (html: string | undefined): string => {
         console.error("Failed to parse HTML string", e);
         return html;
     }
+};
+
+export const safeSpreadsheetCell = (value: unknown): string | number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const text = String(value ?? '');
+    return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
 };
 
 
@@ -31,29 +36,42 @@ export const parseSpreadsheet = (file: File): Promise<Question[]> => {
         reader.onload = (e) => {
             try {
                 const data = e.target?.result;
-                const workbook = XLSX.read(data, { type: 'binary' });
+                const workbook = XLSX.read(data, { type: 'array' });
                 const sheetName = workbook.SheetNames[0];
+                if (!sheetName) throw new Error('La hoja de cálculo está vacía.');
                 const worksheet = workbook.Sheets[sheetName];
                 const json: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-                const questions: Question[] = json.slice(1) // Skip header row
+                const questions: Question[] = json.slice(1, 201) // Skip header row and cap work
                     .map((row, index) => {
                         if (row.length < 6) return null; // Must have question, 4 options, and answer index
 
+                        const questionText = decodeHtml(String(row[0] ?? '')).trim();
+                        const options = row.slice(1, 5).map(value => decodeHtml(String(value ?? '')).trim());
+                        const correctAnswerIndex = Number(row[5]);
+                        if (
+                            !questionText ||
+                            options.some(option => !option) ||
+                            new Set(options.map(option => option.toLocaleLowerCase())).size !== options.length ||
+                            !Number.isInteger(correctAnswerIndex) ||
+                            correctAnswerIndex < 0 ||
+                            correctAnswerIndex > 3
+                        ) return null;
+
                         const question: Question = {
                             id: `${file.name}-${index}`,
-                            questionText: decodeHtml(row[0]),
-                            options: [decodeHtml(row[1]), decodeHtml(row[2]), decodeHtml(row[3]), decodeHtml(row[4])],
-                            correctAnswerIndex: parseInt(row[5], 10),
+                            questionText: questionText.slice(0, 2_000),
+                            options: options.map(option => option.slice(0, 1_000)),
+                            correctAnswerIndex,
                         };
                         
                         if (row[6]) {
-                            question.justification = decodeHtml(row[6]);
+                            question.justification = decodeHtml(String(row[6])).trim().slice(0, 5_000);
                         }
                         
                         return question;
                     })
-                    .filter((q): q is Question => q !== null && !isNaN(q.correctAnswerIndex));
+                    .filter((q): q is Question => q !== null);
                 
                 resolve(questions);
             } catch (error) {
@@ -61,7 +79,7 @@ export const parseSpreadsheet = (file: File): Promise<Question[]> => {
             }
         };
         reader.onerror = (error) => reject(error);
-        reader.readAsBinaryString(file);
+        reader.readAsArrayBuffer(file);
     });
 };
 
@@ -112,8 +130,8 @@ const addFooter = (doc: any) => {
 };
 
 // FIX: Implement and export missing functions
-export const exportToPdf = (questions: Question[], t: (key: any) => string) => {
-    const { jsPDF } = jspdf;
+export const exportToPdf = async (questions: Question[], t: (key: any) => string) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.height;
     const pageWidth = doc.internal.pageSize.width;
@@ -194,13 +212,13 @@ export const exportToPdf = (questions: Question[], t: (key: any) => string) => {
 
 export const exportToExcel = (questions: Question[], t: (key: any) => string) => {
     const data = questions.map(q => ({
-        [t('question')]: decodeHtml(q.questionText),
-        [`${t('option')} 1`]: decodeHtml(q.options[0]),
-        [`${t('option')} 2`]: decodeHtml(q.options[1]),
-        [`${t('option')} 3`]: decodeHtml(q.options[2]),
-        [`${t('option')} 4`]: decodeHtml(q.options[3]),
+        [t('question')]: safeSpreadsheetCell(decodeHtml(q.questionText)),
+        [`${t('option')} 1`]: safeSpreadsheetCell(decodeHtml(q.options[0])),
+        [`${t('option')} 2`]: safeSpreadsheetCell(decodeHtml(q.options[1])),
+        [`${t('option')} 3`]: safeSpreadsheetCell(decodeHtml(q.options[2])),
+        [`${t('option')} 4`]: safeSpreadsheetCell(decodeHtml(q.options[3])),
         [`${t('correctAnswer')} Index (0-3)`]: q.correctAnswerIndex,
-        [t('justification')]: decodeHtml(q.justification),
+        [t('justification')]: safeSpreadsheetCell(decodeHtml(q.justification)),
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(data);
@@ -248,8 +266,8 @@ export const downloadExcelTemplate = (t: (key: string) => string) => {
     XLSX.writeFile(workbook, "quiz_template.xlsx");
 };
 
-export const exportQuizReportToPdf = (quiz: CompletedQuiz, t: (key: any) => string) => {
-    const { jsPDF } = jspdf;
+export const exportQuizReportToPdf = async (quiz: CompletedQuiz, t: (key: any) => string) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.height;
     const pageWidth = doc.internal.pageSize.width;
@@ -375,8 +393,8 @@ export const exportQuizReportToPdf = (quiz: CompletedQuiz, t: (key: any) => stri
     doc.save(`${t('quizDetails')}-${quiz.id}.pdf`);
 }
 
-export const exportQuizForEvaluationToPdf = (quiz: CompletedQuiz, t: (key: any) => string) => {
-    const { jsPDF } = jspdf;
+export const exportQuizForEvaluationToPdf = async (quiz: CompletedQuiz, t: (key: any) => string) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.height;
     const pageWidth = doc.internal.pageSize.width;
@@ -428,8 +446,8 @@ export const exportQuizForEvaluationToPdf = (quiz: CompletedQuiz, t: (key: any) 
     doc.save(`${t('examTitle')}-${quiz.id}.pdf`);
 }
 
-export const exportQuizWithKeyToPdf = (quiz: CompletedQuiz, t: (key: any) => string) => {
-    const { jsPDF } = jspdf;
+export const exportQuizWithKeyToPdf = async (quiz: CompletedQuiz, t: (key: any) => string) => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const pageHeight = doc.internal.pageSize.height;
     const pageWidth = doc.internal.pageSize.width;
@@ -495,11 +513,11 @@ export const exportQuizWithKeyToPdf = (quiz: CompletedQuiz, t: (key: any) => str
 export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any, options?: any) => string) => {
     // 1. Create Summary Data
     const summaryData = [
-        [t('name'), quiz.name || t('untitledQuiz')],
+        [t('name'), safeSpreadsheetCell(quiz.name || t('untitledQuiz'))],
         [t('date'), new Date(quiz.date).toLocaleString()],
         [t('difficulty'), t(quiz.difficulty)],
         [t('score'), `${quiz.score} / ${quiz.totalQuestions}`],
-        [t('status'), Object.keys(quiz.userAnswers).length === quiz.totalQuestions ? t('completed') : t('inProgress')]
+        [t('status'), t('completed')]
     ];
     const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryData);
 
@@ -530,16 +548,16 @@ export const exportQuizBackupToExcel = (quiz: CompletedQuiz, t: (key: any, optio
         }
 
         const savedExps = quiz.savedExplanations?.[q.id] || [];
-        const explanationCells = Array.from({ length: maxExplanations }, (_, i) => decodeHtml(savedExps[i] || ''));
+        const explanationCells = Array.from({ length: maxExplanations }, (_, i) => safeSpreadsheetCell(decodeHtml(savedExps[i] || '')));
 
         return [
             index + 1,
-            decodeHtml(q.questionText),
-            ...q.options.map(opt => decodeHtml(opt)),
-            decodeHtml(q.options[q.correctAnswerIndex]),
-            decodeHtml(yourAnswerText),
-            resultText,
-            decodeHtml(q.justification),
+            safeSpreadsheetCell(decodeHtml(q.questionText)),
+            ...q.options.map(opt => safeSpreadsheetCell(decodeHtml(opt))),
+            safeSpreadsheetCell(decodeHtml(q.options[q.correctAnswerIndex])),
+            safeSpreadsheetCell(decodeHtml(yourAnswerText)),
+            safeSpreadsheetCell(resultText),
+            safeSpreadsheetCell(decodeHtml(q.justification)),
             ...explanationCells
         ];
     });

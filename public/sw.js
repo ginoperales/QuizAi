@@ -1,7 +1,7 @@
 // Quiz AI Service Worker v1.1
 // Enables PWA installability and basic offline caching
 
-const CACHE_NAME = 'quizai-cache-v2';
+const CACHE_NAME = 'quizai-cache-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

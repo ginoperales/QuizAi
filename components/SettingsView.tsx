@@ -24,7 +24,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({ isOpen, onClose, settings, 
   const assistantModels: Array<{ key: AssistantAiModel; label: string; desc: string }> = [
     { key: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Rapido y equilibrado' },
     { key: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Mas razonamiento' },
-    { key: 'deepseek-chat', label: 'DeepSeek Chat', desc: 'Modelo alternativo' },
   ];
 
   return (

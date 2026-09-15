@@ -559,6 +559,42 @@ const App: React.FC = () => {
     setIsSaveModalOpen(true);
   };
 
+  const handleExitWithoutSaving = async () => {
+    if (activeQuiz) {
+      await cleanupActiveQuizProgress(activeQuiz);
+    }
+    localStorage.removeItem('activeQuiz');
+    setActiveQuiz(null);
+    setIsSaveModalOpen(false);
+    setQuizNameToSave('');
+    setSaveAction(null);
+    setShareQuizPublicly(false);
+    setCurrentView(currentUser ? 'generator' : 'landing');
+  };
+
+  const handleRestartQuiz = async (quiz: CompletedQuiz | ActiveQuiz | FirestoreQuiz) => {
+    if (activeQuiz) {
+      await autoPauseActiveQuiz();
+    }
+    const freshQuiz: ActiveQuiz = {
+      id: quiz.id || Date.now().toString(),
+      name: quiz.name,
+      questions: quiz.questions,
+      difficulty: quiz.difficulty,
+      isTimed: quiz.isTimed || false,
+      explanationStyle: quiz.explanationStyle || ExplanationStyle.Didactica,
+      currentQuestionIndex: 0,
+      mode: quiz.mode,
+      userAnswers: {},
+      writtenUserAnswers: quiz.mode === 'Written' ? {} : undefined,
+      savedExplanations: {},
+      creatorUid: quiz.creatorUid,
+      creatorAlias: quiz.creatorAlias,
+    };
+    setActiveQuiz(freshQuiz);
+    setCurrentView('quiz');
+  };
+
   const handleConfirmSave = () => {
     if (!activeQuiz || !saveAction) return;
 
@@ -805,7 +841,7 @@ const App: React.FC = () => {
         if (activeQuiz && activeQuiz.id === editingQuiz.id) {
             setActiveQuiz(updatedQuiz);
             if (currentUser) {
-                await updateDoc(doc(db, "users", currentUser.uid), { activeQuizProgress: updatedQuiz });
+                await updateActiveQuizProgress(currentUser.uid, updatedQuiz);
             }
         } else {
             const updatedPaused = pausedQuizzes.map(q => q.id === editingQuiz.id ? updatedQuiz : q);
@@ -1175,10 +1211,15 @@ const App: React.FC = () => {
                     onUpdate={handleUpdateActiveQuiz}
                     onComplete={handleQuizComplete}
                     onSaveAndExit={handleSaveAndExit}
+                    onExitWithoutSaving={handleExitWithoutSaving}
                     t={t}
                     language={language}
                     autoReadAloud={themeSettings.autoReadAloud || false}
                     soundEnabled={themeSettings.soundEnabled !== false}
+                    speechInputEnabled={themeSettings.speechInputEnabled !== false}
+                    voiceAssistantMode={themeSettings.voiceAssistantMode || false}
+                    voicePersona={themeSettings.voicePersona || 'default'}
+                    assistantAiModel={themeSettings.assistantAiModel || 'gemini-2.5-flash'}
                     currentUser={currentUser}
                 />
             );
@@ -1193,8 +1234,12 @@ const App: React.FC = () => {
                 t={t} 
                 language={language} 
                 onSaveAndExit={handleSaveAndExit}
+                onExitWithoutSaving={handleExitWithoutSaving}
                 autoReadAloud={themeSettings.autoReadAloud || false}
                 soundEnabled={themeSettings.soundEnabled !== false}
+                voiceAssistantMode={themeSettings.voiceAssistantMode || false}
+                voicePersona={themeSettings.voicePersona || 'default'}
+                assistantAiModel={themeSettings.assistantAiModel || 'gemini-2.5-flash'}
                 currentUser={currentUser}
             />
         );
@@ -1202,14 +1247,23 @@ const App: React.FC = () => {
         return <FavoritesView favorites={favorites} toggleFavorite={toggleFavorite} t={t} />;
       case 'results':
         if (!lastCompletedQuiz) return <WelcomeView currentUser={currentUser} onTriggerAuth={() => setCurrentView('auth')} onQuizGenerated={handleQuizGenerated} onGenerationFailed={handleGenerationFailed} setIsLoading={setIsLoading} t={t} isOnline={isOnline} />;
-        return <ResultsView quiz={lastCompletedQuiz} onRestart={() => setCurrentView('generator')} onRetake={handleRetakeIncorrect} t={t} soundEnabled={themeSettings.soundEnabled !== false} />;
+        return <ResultsView 
+                 quiz={lastCompletedQuiz} 
+                 onRestart={() => setCurrentView('generator')} 
+                 onRetake={handleRetakeIncorrect} 
+                 onRestartQuizClean={() => lastCompletedQuiz && handleRestartQuiz(lastCompletedQuiz)}
+                 t={t} 
+                 soundEnabled={themeSettings.soundEnabled !== false} 
+               />;
       case 'history':
         return <HistoryView 
                   completedHistory={completedQuizzes} 
                   pausedHistory={combinedPausedHistory}
+                  currentUser={currentUser}
                   onDelete={handleDeleteQuiz} 
                   onViewDetails={handleViewDetails} 
                   onRetake={handleRetakeQuiz} 
+                  onRestartQuiz={handleRestartQuiz}
                   onRename={handleRenameQuiz} 
                   onResume={handleResumeQuiz}
                   onStudy={handleStudyWithFlashcards}
@@ -1221,13 +1275,14 @@ const App: React.FC = () => {
                 currentUser={currentUser}
                 onGoBack={() => setCurrentView('history')} 
                 onRetake={handleRetakeQuiz}
+                onRestartQuiz={handleRestartQuiz}
                 toggleFavorite={toggleFavorite}
                 isFavorite={isFavorite}
                 onStudy={handleStudyWithFlashcards}
                 onShare={handleShareHistoricalQuiz}
                 t={t}
               />
-          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
+          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} currentUser={currentUser} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRestartQuiz={handleRestartQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
       case 'quizEditor':
           return editingQuiz ? (
               <QuizEditorView 
@@ -1237,7 +1292,7 @@ const App: React.FC = () => {
                 onGoBack={() => { setEditingQuiz(null); setCurrentView('history'); }} 
                 t={t}
               />
-          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
+          ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} currentUser={currentUser} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRestartQuiz={handleRestartQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
       case 'flashcards':
         return flashcardQuiz ? (
           <FlashcardsView
@@ -1253,7 +1308,7 @@ const App: React.FC = () => {
             }}
             t={t}
           />
-        ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
+        ) : <HistoryView completedHistory={completedQuizzes} pausedHistory={combinedPausedHistory} currentUser={currentUser} onDelete={handleDeleteQuiz} onViewDetails={handleViewDetails} onRetake={handleRetakeQuiz} onRestartQuiz={handleRestartQuiz} onRename={handleRenameQuiz} onResume={handleResumeQuiz} onStudy={handleStudyWithFlashcards} t={t} />;
       case 'statistics':
         return <StatisticsView completedQuizzes={completedQuizzes} t={t} />;
       case 'generator':
@@ -1654,10 +1709,9 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* ===== NAV: inline tabs ≤2 items | hamburger >2 items on mobile ===== */}
-      <nav className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-30">
-        {/* Desktop: always show tabs */}
-        <div className="hidden sm:flex container mx-auto px-4 sm:px-6 lg:px-8 justify-center space-x-4 sm:space-x-8">
+      {/* ===== DESKTOP NAV TABS ===== */}
+      <nav className="hidden sm:block bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-30">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 flex justify-center space-x-4 sm:space-x-8">
           {navItems.map(item => (
             <button key={item.view} onClick={() => handleNavClick(item.view as View)}
               className={`flex items-center space-x-2 px-3 py-4 text-sm font-medium border-b-2 transition-colors duration-200 ${
@@ -1668,103 +1722,275 @@ const App: React.FC = () => {
             </button>
           ))}
         </div>
+      </nav>
 
-        {/* Mobile nav */}
-        <div className="sm:hidden">
-          {navItems.length <= 2 ? (
-            /* Unauthenticated: 2 tabs fit fine, show inline */
-            <div className="flex">
-              {navItems.map(item => {
-                const active = currentView === item.view;
-                return (
-                  <button key={item.view} onClick={() => handleNavClick(item.view as View)}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-semibold border-b-2 transition-colors ${
-                      active ? 'border-[rgb(var(--primary-500))] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'
-                             : 'border-transparent text-gray-500 dark:text-gray-400'}`}>
-                    {item.icon}<span>{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            /* Authenticated: many items + user actions → hamburger */
-            <>
-              <button onClick={() => setIsMobileMenuOpen(o => !o)}
-                className="w-full flex items-center justify-between px-4 py-3"
-                aria-label="Menu">
-                <span className="flex items-center gap-2 text-sm font-semibold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]">
-                  {navItems.find(i => i.view === currentView || (currentView === 'quiz' && i.view === 'generator') || (['quizDetail','quizEditor','flashcards'].includes(currentView) && i.view === 'history'))?.icon}
-                  {navItems.find(i => i.view === currentView || (currentView === 'quiz' && i.view === 'generator') || (['quizDetail','quizEditor','flashcards'].includes(currentView) && i.view === 'history'))?.label || 'Menú'}
-                </span>
-                <svg className={`h-5 w-5 text-gray-500 transition-transform ${isMobileMenuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      {/* ===== MOBILE BOTTOM NAVIGATION BAR ===== */}
+      {currentView !== 'quiz' && (
+        <nav 
+          aria-label="Navegación inferior móvil"
+          className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl border-t border-gray-200/90 dark:border-gray-800 shadow-[0_-4px_25px_rgba(0,0,0,0.09)] px-2 py-1 safe-area-bottom"
+        >
+          <div className="flex items-center justify-around">
+            {!currentUser ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('landing')}
+                  className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'landing'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <PlusCircleIcon className={`h-5 w-5 transition-transform ${currentView === 'landing' ? 'scale-110' : ''}`} />
+                  <span className="text-[11px] mt-0.5 tracking-tight">{t('navLanding') || 'Inicio'}</span>
+                  {currentView === 'landing' && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('publicQuizzes')}
+                  className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'publicQuizzes'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <BookOpenIcon className={`h-5 w-5 transition-transform ${currentView === 'publicQuizzes' ? 'scale-110' : ''}`} />
+                  <span className="text-[11px] mt-0.5 tracking-tight">{t('navPublic') || 'Retos'}</span>
+                  {currentView === 'publicQuizzes' && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('auth')}
+                  className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'auth'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                  </svg>
+                  <span className="text-[11px] mt-0.5 tracking-tight">Acceder</span>
+                  {currentView === 'auth' && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('generator')}
+                  className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'generator' || currentView === 'landing'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <PlusCircleIcon className={`h-5 w-5 transition-transform ${currentView === 'generator' ? 'scale-110' : ''}`} />
+                  <span className="text-[10px] sm:text-[11px] mt-0.5 tracking-tight truncate max-w-[65px]">
+                    {activeQuiz ? 'Continuar' : 'Crear'}
+                  </span>
+                  {(currentView === 'generator' || currentView === 'landing') && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('publicQuizzes')}
+                  className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'publicQuizzes'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <BookOpenIcon className={`h-5 w-5 transition-transform ${currentView === 'publicQuizzes' ? 'scale-110' : ''}`} />
+                  <span className="text-[10px] sm:text-[11px] mt-0.5 tracking-tight truncate max-w-[65px]">Retos</span>
+                  {currentView === 'publicQuizzes' && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('favorites')}
+                  className={`relative flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'favorites'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <div className="relative">
+                    <StarIcon className={`h-5 w-5 transition-transform ${currentView === 'favorites' ? 'scale-110' : ''}`} />
+                    {favorites.length > 0 && (
+                      <span className="absolute -top-1 -right-2.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-[8px] font-extrabold text-white">
+                        {favorites.length > 99 ? '99+' : favorites.length}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] sm:text-[11px] mt-0.5 tracking-tight truncate max-w-[65px]">Favoritos</span>
+                  {currentView === 'favorites' && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavClick('history')}
+                  className={`flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    currentView === 'history' || ['quizDetail', 'quizEditor', 'flashcards'].includes(currentView)
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <HistoryIcon className={`h-5 w-5 transition-transform ${['history', 'quizDetail', 'quizEditor', 'flashcards'].includes(currentView) ? 'scale-110' : ''}`} />
+                  <span className="text-[10px] sm:text-[11px] mt-0.5 tracking-tight truncate max-w-[65px]">Historial</span>
+                  {['history', 'quizDetail', 'quizEditor', 'flashcards'].includes(currentView) && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsMobileMenuOpen(o => !o)}
+                  className={`relative flex-1 flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+                    isMobileMenuOpen || currentView === 'adminDashboard'
+                      ? 'text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <div className="relative">
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+                    </svg>
+                    {pendingReportsCount > 0 && currentUser.role === 'admin' && (
+                      <span className="absolute -top-1 -right-2 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-red-500" />
+                    )}
+                  </div>
+                  <span className="text-[10px] sm:text-[11px] mt-0.5 tracking-tight truncate max-w-[65px]">
+                    {t('moreMenu') || 'Más'}
+                  </span>
+                  {(isMobileMenuOpen || currentView === 'adminDashboard') && (
+                    <span className="h-1 w-4 rounded-full bg-[rgb(var(--primary-600))] dark:bg-[rgb(var(--primary-400))] mt-0.5 animate-fade-in" />
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </nav>
+      )}
+
+      {/* Mobile More Actions Bottom Sheet / Drawer */}
+      {isMobileMenuOpen && currentUser && (
+        <div className="sm:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end animate-fade-in" onClick={() => setIsMobileMenuOpen(false)}>
+          <div 
+            className="w-full bg-white dark:bg-gray-800 rounded-t-3xl shadow-2xl p-6 border-t border-gray-200 dark:border-gray-700 animate-slide-up-fade-in space-y-4 max-h-[80vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto -mt-2 mb-3" />
+            
+            <div className="flex items-center justify-between pb-3 border-b border-gray-150 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-[rgb(var(--primary-600))] to-[rgb(var(--primary-400))] flex items-center justify-center text-white font-bold text-lg shadow">
+                  {currentUser.alias.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 dark:text-white leading-tight">@{currentUser.alias}</h3>
+                  <span className="font-mono text-xs text-gray-400 dark:text-gray-500">ID: {currentUser.readableId}</span>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full bg-gray-100 dark:bg-gray-700"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
+            </div>
 
-              {isMobileMenuOpen && (
-                <div className="border-t border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg pb-3">
-                  {/* Nav items */}
-                  {navItems.map(item => {
-                    const active = currentView === item.view || (currentView === 'quiz' && item.view === 'generator') || (['quizDetail','quizEditor','flashcards'].includes(currentView) && item.view === 'history');
-                    return (
-                      <button key={item.view} onClick={() => { handleNavClick(item.view as View); setIsMobileMenuOpen(false); }}
-                        className={`w-full flex items-center gap-3 px-5 py-3 text-sm font-medium border-l-4 transition-colors ${
-                          active ? 'border-[rgb(var(--primary-500))] bg-[rgba(var(--primary-500),0.06)] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'
-                                 : 'border-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}>
-                        <span className={active ? 'text-[rgb(var(--primary-500))]' : 'text-gray-400'}>{item.icon}</span>
-                        {item.label}
-                      </button>
-                    );
-                  })}
-
-                  {/* Divider + user account actions */}
-                  {currentUser && (
-                    <div className="mt-1 pt-2 mx-4 border-t border-gray-100 dark:border-gray-700 space-y-2">
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Mi Cuenta</p>
-                      <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                        @{currentUser.alias} <span className="font-mono text-xs text-gray-400">({currentUser.readableId})</span>
-                      </p>
-                      <div className="flex gap-2">
-                        {currentUser.role === 'admin' && (
-                          <button onClick={() => { setCurrentView('adminDashboard'); setIsMobileMenuOpen(false); }}
-                            className={`relative flex-1 py-2 text-xs font-bold rounded-lg border transition-all ${
-                              currentView === 'adminDashboard'
-                                ? 'bg-[rgb(var(--primary-600))] text-white border-transparent'
-                                : 'border-[rgb(var(--primary-500))] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))]'}`}>
-                            Admin Panel
-                            {pendingReportsCount > 0 && (
-                              <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-extrabold text-white">{pendingReportsCount}</span>
-                            )}
-                          </button>
-                        )}
-                        <button onClick={async () => {
-                          setIsMobileMenuOpen(false);
-                          const alias = currentUser?.alias || 'Usuario';
-                          setShowFarewellOverlay(alias);
-                          setTimeout(async () => {
-                            await logoutUser(); setCurrentUser(null); setFavoriteQuizzes([]);
-                            setShowFarewellOverlay(null); setCurrentView('landing');
-                          }, 2000);
-                        }} className="flex-1 py-2 text-xs font-bold rounded-lg bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500 hover:text-white transition-all">
-                          Cerrar Sesión
-                        </button>
-                      </div>
-                      <button onClick={() => { setIsSettingsOpen(true); setIsMobileMenuOpen(false); }}
-                        className="w-full py-2 text-xs font-medium text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-all flex items-center justify-center gap-1.5">
-                        <Cog6ToothIcon className="h-4 w-4" /> Configuración
-                      </button>
-                    </div>
+            <div className="space-y-2">
+              {currentUser.role === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => { setCurrentView('adminDashboard'); setIsMobileMenuOpen(false); }}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-[rgba(var(--primary-500),0.08)] text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] font-bold text-sm hover:bg-[rgba(var(--primary-500),0.15)] transition-all"
+                >
+                  <span className="flex items-center gap-2.5">
+                    <ChartBarIcon className="h-5 w-5" />
+                    Panel de Administrador
+                  </span>
+                  {pendingReportsCount > 0 && (
+                    <span className="flex h-5 px-2 items-center justify-center rounded-full bg-red-500 text-[10px] font-extrabold text-white">
+                      {pendingReportsCount} pendientes
+                    </span>
                   )}
-                </div>
+                </button>
               )}
-            </>
-          )}
+
+              <button
+                type="button"
+                onClick={() => { setCurrentView('statistics'); setIsMobileMenuOpen(false); }}
+                className="w-full flex items-center gap-2.5 px-4 py-3 rounded-xl text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-semibold transition-all"
+              >
+                <ChartBarIcon className="h-5 w-5 text-gray-400" />
+                Estadísticas de Aprendizaje
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setIsSettingsOpen(true); setIsMobileMenuOpen(false); }}
+                className="w-full flex items-center gap-2.5 px-4 py-3 rounded-xl text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-semibold transition-all"
+              >
+                <Cog6ToothIcon className="h-5 w-5 text-gray-400" />
+                Configuración y Preferencias
+              </button>
+
+              <div className="border-t border-gray-150 dark:border-gray-700 pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsMobileMenuOpen(false);
+                    const alias = currentUser?.alias || 'Usuario';
+                    setShowFarewellOverlay(alias);
+                    setTimeout(async () => {
+                      await logoutUser();
+                      setCurrentUser(null);
+                      setFavoriteQuizzes([]);
+                      setActiveQuiz(null);
+                      setPausedQuizzes([]);
+                      setCompletedQuizzes([]);
+                      localStorage.removeItem('activeQuiz');
+                      localStorage.removeItem('pausedQuizzes');
+                      localStorage.removeItem('completedQuizzes');
+                      setShowFarewellOverlay(null);
+                      setCurrentView('landing');
+                    }, 2000);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500 hover:text-white text-sm font-bold transition-all"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                  Cerrar Sesión
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </nav>
+      )}
 
       {/* PWA Install Banner */}
       {showInstallBanner && (
-        <div className="fixed bottom-4 left-4 right-4 z-50 sm:left-auto sm:right-6 sm:w-80 animate-slide-up-fade-in">
+        <div className="fixed bottom-20 sm:bottom-4 left-4 right-4 z-50 sm:left-auto sm:right-6 sm:w-80 animate-slide-up-fade-in">
           <div className="backdrop-blur-md bg-white/95 dark:bg-gray-800/95 border border-[rgba(var(--primary-500),0.3)] rounded-2xl shadow-2xl p-4 flex items-center gap-3">
             <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-gradient-to-br from-[rgb(var(--primary-600))] to-[rgb(var(--primary-500))] flex items-center justify-center shadow">
               <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1791,11 +2017,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <main className="flex-grow container mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="flex-grow container mx-auto p-4 sm:p-6 lg:p-8 pb-24 sm:pb-8">
         {renderContent()}
       </main>
 
-      <footer className="text-center py-6 text-sm text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-800 mt-12 bg-white/20 dark:bg-gray-800/10 backdrop-blur-sm">
+      <footer className="text-center py-6 text-sm text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-800 mt-12 bg-white/20 dark:bg-gray-800/10 backdrop-blur-sm pb-24 sm:pb-6">
         <p>&copy; {new Date().getFullYear()} {APP_TITLE} - Un producto de{' '}
           <a href="https://sv-construcciones.web.app/" target="_blank" rel="noopener noreferrer" className="font-bold text-[rgb(var(--primary-600))] dark:text-[rgb(var(--primary-400))] hover:underline">SV GROUP</a>
           {' / '}
@@ -1833,9 +2059,20 @@ const App: React.FC = () => {
             </div>
           )}
 
-          <div className="mt-6 flex justify-end space-x-2">
-            <button onClick={() => setIsSaveModalOpen(false)} className="px-4 py-2.5 bg-gray-200 text-gray-800 rounded-xl text-sm font-bold hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-all">{t('cancel')}</button>
-            <button onClick={handleConfirmSave} className="px-5 py-2.5 bg-[rgb(var(--primary-600))] text-white rounded-xl text-sm font-bold hover:bg-[rgb(var(--primary-700))] transition-all shadow-md active:scale-[0.98]">{t('save')}</button>
+          <div className="mt-6 flex flex-wrap justify-between items-center gap-2">
+            {saveAction === 'exit' && (
+              <button 
+                type="button"
+                onClick={handleExitWithoutSaving} 
+                className="px-4 py-2.5 bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-xl text-xs sm:text-sm font-bold transition-all border border-red-200 dark:border-red-800/40"
+              >
+                {t('discardAndExit') || 'Descartar y Salir'}
+              </button>
+            )}
+            <div className="flex items-center space-x-2 ml-auto">
+              <button onClick={() => setIsSaveModalOpen(false)} className="px-4 py-2.5 bg-gray-200 text-gray-800 rounded-xl text-sm font-bold hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 transition-all">{t('cancel')}</button>
+              <button onClick={handleConfirmSave} className="px-5 py-2.5 bg-[rgb(var(--primary-600))] text-white rounded-xl text-sm font-bold hover:bg-[rgb(var(--primary-700))] transition-all shadow-md active:scale-[0.98]">{t('save')}</button>
+            </div>
           </div>
         </div>
       </Modal>

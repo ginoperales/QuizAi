@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Difficulty, Question, Language, ExplanationStyle, AssistantAiModel } from '../types';
 import { decodeHtml } from "./fileService";
+import { normalizeGeneratedQuestions } from './quizLogic';
 
 const API_KEY = process.env.API_KEY;
 
@@ -10,9 +11,14 @@ if (!API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: API_KEY! });
 
-// DEEPSEEK CONFIGURATION
-const DEEPSEEK_API_KEY = "sk-5b7819ca82d443ff8e464e325c8e5e58";
+// DeepSeek must be called through a trusted backend. A provider secret in this
+// browser bundle would be visible to every visitor, so direct calls are disabled.
+const getDeepSeekApiKey = (): never => {
+  throw new Error('DeepSeek requiere un proxy de servidor configurado.');
+};
 const DEFAULT_ASSISTANT_MODEL: AssistantAiModel = 'gemini-2.5-flash';
+const MAX_TEXT_CHARACTERS = 1_000_000;
+const MAX_IMAGE_BASE64_CHARACTERS = 7_000_000;
 
 const isDeepSeekModel = (model: AssistantAiModel) => model === 'deepseek-chat';
 
@@ -148,7 +154,8 @@ export const generateQuestionsLocally = (text: string, difficulty: Difficulty): 
     const targetWord = keyWords[0] || commonWords[0];
     if (!targetWord) continue;
     
-    const questionText = sentence.replace(new RegExp(`\\b${targetWord}\\b`, 'i'), "_______");
+    const escapedTarget = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const questionText = sentence.replace(new RegExp(`\\b${escapedTarget}\\b`, 'i'), "_______");
     
     // Generate dummy options
     const dummyOptions = [
@@ -190,8 +197,8 @@ export const calculateLocalSimilarity = (userAnswer: string, referenceText: stri
       .filter(w => w.length > 2); // Only words longer than 2 chars
   };
 
-  const userWords = clean(userAnswer);
-  const refWords = clean(referenceText);
+  const userWords = [...new Set(clean(userAnswer))];
+  const refWords = [...new Set(clean(referenceText))];
 
   if (userWords.length === 0 || refWords.length === 0) return 0;
 
@@ -228,6 +235,8 @@ export const generateQuestionsFromTextWithDeepSeek = async (
   difficulty: Difficulty,
   customPrompt?: string
 ): Promise<Question[]> => {
+  throw new Error('DeepSeek requiere un proxy de servidor configurado.');
+  /* istanbul ignore next -- legacy implementation retained for server migration */
   const prompt = `
     Based on the following text, generate 5 multiple-choice questions of ${difficulty} difficulty.
     ${customPrompt ? `PRIORITIZE THE FOLLOWING INSTRUCTIONS: "${customPrompt}"` : ''}
@@ -267,7 +276,7 @@ export const generateQuestionsFromTextWithDeepSeek = async (
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${DEEPSEEK_API_KEY}`
+      "Authorization": `Bearer ${getDeepSeekApiKey()}`
     },
     body: JSON.stringify({
       model: "deepseek-chat",
@@ -310,18 +319,14 @@ export const generateQuestionsFromTextWithDeepSeek = async (
     }
   }
 
-  return questionsList.map((q: any, index: number) => {
-    if (!q.questionText || !q.options || q.options.length !== 4 || q.correctAnswerIndex === undefined || !q.justification) {
-        throw new Error('Invalid question format received from DeepSeek');
-    }
-    return {
-      id: `${Date.now()}-${index}`,
-      questionText: decodeHtml(q.questionText),
-      options: q.options.map((opt: string) => decodeHtml(opt)),
-      correctAnswerIndex: q.correctAnswerIndex,
-      justification: decodeHtml(q.justification),
-    };
-  });
+  const generatedAt = Date.now();
+  return normalizeGeneratedQuestions(questionsList).map((question, index) => ({
+    id: `${generatedAt}-${index}`,
+    questionText: decodeHtml(question.questionText),
+    options: question.options.map(decodeHtml),
+    correctAnswerIndex: question.correctAnswerIndex,
+    justification: decodeHtml(question.justification),
+  }));
 };
 
 export const getDeeperExplanationWithDeepSeek = async (
@@ -331,6 +336,8 @@ export const getDeeperExplanationWithDeepSeek = async (
   language: Language,
   style: ExplanationStyle
 ): Promise<string> => {
+  throw new Error('DeepSeek requiere un proxy de servidor configurado.');
+  /* istanbul ignore next -- legacy implementation retained for server migration */
   const languageMap = {
     en: 'English',
     es: 'Spanish',
@@ -354,7 +361,7 @@ export const getDeeperExplanationWithDeepSeek = async (
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${DEEPSEEK_API_KEY}`
+      "Authorization": `Bearer ${getDeepSeekApiKey()}`
     },
     body: JSON.stringify({
       model: "deepseek-chat",
@@ -380,6 +387,8 @@ export const gradeWrittenAnswerWithDeepSeek = async (
   userAnswer: string,
   language: Language
 ): Promise<{ score: number; feedback: string }> => {
+  throw new Error('DeepSeek requiere un proxy de servidor configurado.');
+  /* istanbul ignore next -- legacy implementation retained for server migration */
   const languageMap = { en: 'English', es: 'Spanish' };
 
   const prompt = `
@@ -405,7 +414,7 @@ export const gradeWrittenAnswerWithDeepSeek = async (
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${DEEPSEEK_API_KEY}`
+      "Authorization": `Bearer ${getDeepSeekApiKey()}`
     },
     body: JSON.stringify({
       model: "deepseek-chat",
@@ -431,7 +440,7 @@ export const gradeWrittenAnswerWithDeepSeek = async (
   }
 
   return {
-    score: result.score,
+    score: Math.round(Math.min(100, Math.max(0, result.score))),
     feedback: result.feedback,
   };
 };
@@ -468,11 +477,13 @@ export const interpretMultipleChoiceAnswerWithAi = async (
   `;
 
   if (isDeepSeekModel(model)) {
+    return interpretMultipleChoiceAnswerWithAi(question, options, spokenAnswer, language, DEFAULT_ASSISTANT_MODEL);
+    /* istanbul ignore next -- legacy implementation retained for server migration */
     const response = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`
+      "Authorization": `Bearer ${getDeepSeekApiKey()}`
       },
       body: JSON.stringify({
         model: "deepseek-chat",
@@ -489,9 +500,12 @@ export const interpretMultipleChoiceAnswerWithAi = async (
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content.trim());
+    const optionIndex = Number.isInteger(result.optionIndex) && result.optionIndex >= 0 && result.optionIndex < options.length
+      ? result.optionIndex
+      : null;
     return {
-      optionIndex: typeof result.optionIndex === 'number' ? result.optionIndex : null,
-      confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+      optionIndex,
+      confidence: typeof result.confidence === 'number' ? Math.min(100, Math.max(0, result.confidence)) : 0,
       feedback: typeof result.feedback === 'string' ? result.feedback : '',
     };
   }
@@ -524,9 +538,12 @@ export const interpretMultipleChoiceAnswerWithAi = async (
   });
 
   const result = JSON.parse(response.text.trim());
+  const optionIndex = Number.isInteger(result.optionIndex) && result.optionIndex >= 0 && result.optionIndex < options.length
+    ? result.optionIndex
+    : null;
   return {
-    optionIndex: typeof result.optionIndex === 'number' ? result.optionIndex : null,
-    confidence: typeof result.confidence === 'number' ? result.confidence : 0,
+    optionIndex,
+    confidence: typeof result.confidence === 'number' ? Math.min(100, Math.max(0, result.confidence)) : 0,
     feedback: typeof result.feedback === 'string' ? result.feedback : '',
   };
 };
@@ -586,7 +603,7 @@ export const gradeWrittenAnswer = async (
         }
 
         return {
-            score: result.score,
+            score: Math.round(Math.min(100, Math.max(0, result.score))),
             feedback: result.feedback,
         };
 
@@ -612,6 +629,10 @@ export const generateQuestionsFromText = async (
   t: (key: any) => string,
   customPrompt?: string
 ): Promise<Question[]> => {
+  if (!textContent.trim() || textContent.length > MAX_TEXT_CHARACTERS) {
+    throw new Error('El contenido está vacío o supera el límite permitido.');
+  }
+  customPrompt = customPrompt?.trim().slice(0, 500);
   // PRIORITY 1: Google Gemini API
   try {
     console.log("Attempting quiz generation with Gemini...");
@@ -651,20 +672,15 @@ export const generateQuestionsFromText = async (
     }
 
     const jsonString = rawText.substring(startIndex, endIndex + 1);
-    const generatedQuestions = JSON.parse(jsonString);
-
-    return generatedQuestions.map((q: any, index: number) => {
-        if (!q.questionText || !q.options || q.options.length !== 4 || q.correctAnswerIndex === undefined || !q.justification) {
-            throw new Error('Invalid question format received from API');
-        }
-        return {
-          id: `${Date.now()}-${index}`,
-          questionText: decodeHtml(q.questionText),
-          options: q.options.map((opt: string) => decodeHtml(opt)),
-          correctAnswerIndex: q.correctAnswerIndex,
-          justification: decodeHtml(q.justification),
-        };
-    });
+    const generatedQuestions = normalizeGeneratedQuestions(JSON.parse(jsonString));
+    const generatedAt = Date.now();
+    return generatedQuestions.map((question, index) => ({
+      id: `${generatedAt}-${index}`,
+      questionText: decodeHtml(question.questionText),
+      options: question.options.map(decodeHtml),
+      correctAnswerIndex: question.correctAnswerIndex,
+      justification: decodeHtml(question.justification),
+    }));
 
   } catch (geminiError) {
     console.warn("Gemini generation failed, falling back to DeepSeek API:", geminiError);
@@ -695,6 +711,11 @@ export const generateQuestionsFromImage = async (
   t: (key: any) => string,
   customPrompt?: string
 ): Promise<Question[]> => {
+  const allowedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+  if (!allowedImageTypes.has(mimeType) || !imageData || imageData.length > MAX_IMAGE_BASE64_CHARACTERS) {
+    throw new Error('La imagen está vacía, es demasiado grande o su formato no es compatible.');
+  }
+  customPrompt = customPrompt?.trim().slice(0, 500);
   // PRIORITY 1: Google Gemini API (Supports Vision)
   try {
     console.log("Attempting quiz generation from image with Gemini...");
@@ -738,32 +759,21 @@ export const generateQuestionsFromImage = async (
     }
 
     const jsonString = rawText.substring(startIndex, endIndex + 1);
-    const generatedQuestions = JSON.parse(jsonString);
-
-    return generatedQuestions.map((q: any, index: number) => {
-      if (!q.questionText || !q.options || q.options.length !== 4 || q.correctAnswerIndex === undefined || !q.justification) {
-        throw new Error('Invalid question format received from API');
-      }
-      return {
-        id: `${Date.now()}-${index}`,
-        questionText: decodeHtml(q.questionText),
-        options: q.options.map((opt: string) => decodeHtml(opt)),
-        correctAnswerIndex: q.correctAnswerIndex,
-        justification: decodeHtml(q.justification),
-      };
-    });
+    const generatedQuestions = normalizeGeneratedQuestions(JSON.parse(jsonString));
+    const generatedAt = Date.now();
+    return generatedQuestions.map((question, index) => ({
+      id: `${generatedAt}-${index}`,
+      questionText: decodeHtml(question.questionText),
+      options: question.options.map(decodeHtml),
+      correctAnswerIndex: question.correctAnswerIndex,
+      justification: decodeHtml(question.justification),
+    }));
 
   } catch (geminiError) {
     console.error("Error generating questions from Gemini (Image):", geminiError);
     
-    // PRIORITY 2: Local Algorithm Fallback (Since DeepSeek Vision is not multimodal-chat ready yet)
-    try {
-      console.warn("Gemini vision failed, falling back to Local Algorithm...");
-      return generateQuestionsLocally("Cuestionario generado desde imagen", difficulty);
-    } catch (localError) {
-      console.error("Local generation failed for image fallback:", localError);
-      throw new Error(t('errorGeneratingQuiz'));
-    }
+    // Without OCR output, a local fallback would fabricate unrelated questions.
+    throw new Error(t('errorGeneratingQuiz'));
   }
 };
 
