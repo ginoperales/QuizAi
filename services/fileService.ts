@@ -30,30 +30,79 @@ export const readFileAsText = (file: File): Promise<string> => {
   });
 };
 
+export const parseCorrectAnswerIndex = (rawValue: unknown, isOneBased = false): number => {
+    if (rawValue === null || rawValue === undefined) return -1;
+    const str = String(rawValue).trim().toUpperCase();
+    if (!str) return -1;
+
+    // Letters A-D or variants
+    if (str === 'A' || str === 'OPCIÓN 1' || str === 'OPCION 1' || str === 'OPTION 1' || str === 'OPCIÓN A' || str === 'OPCION A') return 0;
+    if (str === 'B' || str === 'OPCIÓN 2' || str === 'OPCION 2' || str === 'OPTION 2' || str === 'OPCIÓN B' || str === 'OPCION B') return 1;
+    if (str === 'C' || str === 'OPCIÓN 3' || str === 'OPCION 3' || str === 'OPTION 3' || str === 'OPCIÓN C' || str === 'OPCION C') return 2;
+    if (str === 'D' || str === 'OPCIÓN 4' || str === 'OPCION 4' || str === 'OPTION 4' || str === 'OPCIÓN D' || str === 'OPCION D') return 3;
+
+    const num = Number(str);
+    if (Number.isInteger(num)) {
+        if (isOneBased) {
+            if (num >= 1 && num <= 4) return num - 1;
+        } else {
+            if (num >= 0 && num <= 3) return num;
+            if (num === 4) return 3; // 4 is always 4th option (index 3)
+        }
+    }
+
+    return -1;
+};
+
 export const parseSpreadsheet = (file: File): Promise<Question[]> => {
     return new Promise((resolve, reject) => {
+        if (typeof XLSX === 'undefined') {
+            reject(new Error("La librería de procesamiento de hojas de cálculo (XLSX) no está disponible en el navegador. Revisa tu conexión a internet o desactiva bloqueadores de scripts."));
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
                 const data = e.target?.result;
                 const workbook = XLSX.read(data, { type: 'array' });
                 const sheetName = workbook.SheetNames[0];
-                if (!sheetName) throw new Error('La hoja de cálculo está vacía.');
+                if (!sheetName) throw new Error('La hoja de cálculo seleccionada está vacía.');
                 const worksheet = workbook.Sheets[sheetName];
                 const json: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-                const questions: Question[] = json.slice(1, 201) // Skip header row and cap work
+                if (!json || json.length <= 1) {
+                    throw new Error('La hoja de cálculo no contiene filas de datos. Descarga la plantilla de Excel para ver el formato requerido.');
+                }
+
+                // Detect if rows use 1-based indexing (1 to 4) instead of 0 to 3:
+                // If any answer is 4, or if all numeric answers are between 1 and 4 with no row containing 0.
+                const dataRows = json.slice(1, 201);
+                let hasZero = false;
+                let hasFour = false;
+
+                dataRows.forEach(row => {
+                    if (row && row[5] !== undefined) {
+                        const val = String(row[5]).trim();
+                        if (val === '0') hasZero = true;
+                        if (val === '4') hasFour = true;
+                    }
+                });
+
+                const isOneBased = hasFour || !hasZero;
+
+                const questions: Question[] = dataRows
                     .map((row, index) => {
-                        if (row.length < 6) return null; // Must have question, 4 options, and answer index
+                        if (!row || row.length < 6) return null; // Must have question, 4 options, and answer index
 
                         const questionText = decodeHtml(String(row[0] ?? '')).trim();
                         const options = row.slice(1, 5).map(value => decodeHtml(String(value ?? '')).trim());
-                        const correctAnswerIndex = Number(row[5]);
+                        const correctAnswerIndex = parseCorrectAnswerIndex(row[5], isOneBased);
+
                         if (
                             !questionText ||
+                            options.length !== 4 ||
                             options.some(option => !option) ||
-                            new Set(options.map(option => option.toLocaleLowerCase())).size !== options.length ||
-                            !Number.isInteger(correctAnswerIndex) ||
                             correctAnswerIndex < 0 ||
                             correctAnswerIndex > 3
                         ) return null;
@@ -73,6 +122,10 @@ export const parseSpreadsheet = (file: File): Promise<Question[]> => {
                     })
                     .filter((q): q is Question => q !== null);
                 
+                if (questions.length === 0) {
+                    throw new Error('No se encontraron preguntas con el formato esperado. Asegúrate de incluir: Pregunta, 4 opciones y la respuesta correcta (0-3, 1-4 o A-D). Puedes descargar la plantilla como guía.');
+                }
+
                 resolve(questions);
             } catch (error) {
                 reject(error);

@@ -1082,16 +1082,8 @@ const App: React.FC = () => {
       );
     }
     
-    if (error) {
-       return (
-         <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-md" role="alert">
-           <p className="font-bold">{t('errorTitle')}</p>
-           <p>{error}</p>
-         </div>
-       );
-    }
-
-    switch (currentView) {
+    const renderActiveView = () => {
+      switch (currentView) {
       case 'landing':
         return (
           <LandingView 
@@ -1355,6 +1347,35 @@ const App: React.FC = () => {
         );
     }
   };
+
+  return (
+    <>
+      {error && (
+        <div className="w-full max-w-2xl mx-auto mb-6 p-4 rounded-2xl border border-red-200 dark:border-red-900/60 bg-red-50/95 dark:bg-red-950/40 text-red-800 dark:text-red-200 backdrop-blur-md shadow-lg flex items-start justify-between gap-3 transition-all animate-fade-in" role="alert">
+          <div className="flex items-start gap-3 min-w-0">
+            <span className="text-xl flex-shrink-0 mt-0.5">⚠️</span>
+            <div className="min-w-0">
+              <p className="font-bold text-sm text-red-900 dark:text-red-100">{t('errorTitle')}</p>
+              <p className="text-xs sm:text-sm text-red-700 dark:text-red-300 mt-1 leading-relaxed break-words">{error}</p>
+            </div>
+          </div>
+          <button 
+            type="button" 
+            onClick={() => setError(null)}
+            className="p-1.5 text-red-400 hover:text-red-700 dark:hover:text-red-200 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors flex-shrink-0 cursor-pointer"
+            title="Cerrar mensaje de error"
+            aria-label="Cerrar mensaje de error"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {renderActiveView()}
+    </>
+  );
+};
 
   const handleNavClick = (view: View) => {
     if (view === 'generator' && activeQuiz) {

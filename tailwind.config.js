@@ -8,7 +8,14 @@ export default {
   ],
   darkMode: 'class',
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        gray: {
+          750: '#262f40',
+          850: '#151b28',
+        },
+      },
+    },
   },
   plugins: [],
 };
